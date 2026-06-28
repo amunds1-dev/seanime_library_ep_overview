@@ -57,7 +57,7 @@ function init() {
             ]),
         )
 
-        diag("Episode Overview Bar v0.2.2 active")
+        diag("Episode Overview Bar v0.2.3 active")
 
         // ── Theme-aware colors (resolve against Seanime's CSS variables) ──────
         // To restyle, edit these. var(--brand) follows the user's accent color;
@@ -66,7 +66,7 @@ function init() {
             track: "rgb(var(--color-gray-500) / 0.22)", // total backdrop
             aired: "rgb(var(--color-gray-200) / 0.32)", // aired fill
             watched: "rgb(var(--color-brand-300))", // watched — light purple (accent)
-            library: "rgb(var(--color-brand-500))", // in-library — medium purple (accent)
+            library: "rgb(var(--color-brand-300))", // in-library — light purple (accent)
             segment: "rgb(var(--color-gray-950) / 0.40)", // segment dividers
         }
 
@@ -213,24 +213,47 @@ function init() {
             })
         }
 
-        // ── 1. Library / Home grid ───────────────────────────────────────────
-        async function injectCard(card: $ui.DOMElement): Promise<boolean> {
-            // Live read (not the snapshot): a marker set by a concurrent pass must
-            // be visible here, otherwise observe + sweep can both inject = duplicate.
-            if (await card.getAttribute("data-epov")) return false
-            const type = await readAttr(card, "data-media-type")
-            if (type && type !== "anime") {
-                card.setAttribute("data-epov", "skip") // manga etc.
-                return false
+        // ── Serialized runner (debounce + no-overlap) ────────────────────────
+        // Three near-simultaneous passes (observe + navigate + startup) could each
+        // read "no bar yet" before any of them wrote, producing duplicate bars.
+        // A debounced single-runner collapses bursts and guarantees reconciles
+        // never overlap; a trailing run handles items that mounted mid-reconcile.
+        function makeRunner(key: string, fn: () => Promise<void>): () => void {
+            let running = false
+            let rerun = false
+            async function run() {
+                if (running) {
+                    rerun = true
+                    return
+                }
+                running = true
+                try {
+                    await fn()
+                } catch (e) {
+                    $debug.error("[episode-overview-bar] runner " + key, e)
+                } finally {
+                    running = false
+                    if (rerun) {
+                        rerun = false
+                        void run()
+                    }
+                }
             }
+            return () => ctx.jobs.debounce("epov-" + key, () => void run(), 120)
+        }
+
+        // ── 1. Library / Home grid ───────────────────────────────────────────
+        // Dedup is an in-DOM existence check ("does this card already have a
+        // bar?") — authoritative, and self-heals if Seanime re-renders a card.
+        async function injectCard(card: $ui.DOMElement): Promise<boolean> {
+            const type = await readAttr(card, "data-media-type")
+            if (type && type !== "anime") return false
+            if (await card.queryOne("[data-epov-bar]")) return false // already has one
             const idStr = await readAttr(card, "data-media-id")
             const id = idStr ? parseInt(idStr, 10) : NaN
             if (!id || isNaN(id)) return false
-            card.setAttribute("data-epov", "1") // claim early to block other passes
             const c = await getCounts(id)
             if (!c) return false
-            // Final guard against a racing pass that already added a bar to this card.
-            if (await card.queryOne("[data-epov-bar]")) return false
             const box = await makeBox(c, false, "4px 2px 2px")
             const title = await card.queryOne(CARD_TITLE_SELECTOR)
             if (title) title.append(box)
@@ -239,21 +262,7 @@ function init() {
         }
 
         let lastReport = ""
-        async function processCards(cards: $ui.DOMElement[], source: string) {
-            const injected = await mapLimit(cards, 6, (card) =>
-                injectCard(card).catch((e) => {
-                    $debug.error("[episode-overview-bar] grid inject error", e)
-                    return false
-                }),
-            )
-            const report = source + ": matched " + cards.length + " injected " + injected
-            if (report !== lastReport) {
-                lastReport = report
-                diag("EpOverview grid " + report)
-            }
-        }
-
-        async function sweepGrid(source: string) {
+        const scheduleGrid = makeRunner("grid", async () => {
             let cards: $ui.DOMElement[] = []
             try {
                 cards = await ctx.dom.query(CARD_SELECTOR)
@@ -261,38 +270,51 @@ function init() {
                 $debug.error("[episode-overview-bar] grid query failed", e)
                 return
             }
-            await processCards(cards, source)
-        }
-
-        // observe handles cards added later (scrolling a carousel, route changes)
-        ctx.dom.observe(CARD_SELECTOR, (cards) => {
-            void processCards(cards, "observe")
-        })
-        // active sweeps cover cards already present when a route mounts
-        ctx.screen.onNavigate(() => {
-            void sweepGrid("nav")
-        })
-        void sweepGrid("startup")
-
-        // ── 2. Detail page ───────────────────────────────────────────────────
-        ctx.dom.observe(DETAIL_EPISODE_LIST_SELECTOR, async (views) => {
-            for (const view of views) {
-                if (await readAttr(view, "data-epov-detail")) continue
-                const wrapper = await ctx.dom.queryOne(DETAIL_PAGE_WRAPPER_SELECTOR)
-                if (!wrapper) continue
-                let id = 0
-                try {
-                    const mediaJson = await readAttr(wrapper, "data-media")
-                    if (mediaJson) id = JSON.parse(mediaJson).id
-                } catch (e) {
-                    $debug.error("[episode-overview-bar] could not parse detail media id", e)
-                }
-                if (!id) continue
-                view.setAttribute("data-epov-detail", "1")
-                const c = await getCounts(id)
-                if (!c) continue
-                view.before(await makeBox(c, true, "8px 0 6px"))
+            const injected = await mapLimit(cards, 6, (card) =>
+                injectCard(card).catch((e) => {
+                    $debug.error("[episode-overview-bar] grid inject error", e)
+                    return false
+                }),
+            )
+            const report = "matched " + cards.length + " injected " + injected
+            if (report !== lastReport) {
+                lastReport = report
+                diag("EpOverview grid " + report)
             }
         })
+
+        // ── 2. Detail page ───────────────────────────────────────────────────
+        // Uses a distinct marker (data-epov-detail-bar) so it isn't confused with
+        // the recommendation cards' bars that also live inside the page wrapper.
+        const scheduleDetail = makeRunner("detail", async () => {
+            const view = await ctx.dom.queryOne(DETAIL_EPISODE_LIST_SELECTOR)
+            if (!view) return
+            const wrapper = await ctx.dom.queryOne(DETAIL_PAGE_WRAPPER_SELECTOR)
+            if (!wrapper) return
+            if (await wrapper.queryOne("[data-epov-detail-bar]")) return // already
+            let id = 0
+            try {
+                const mediaJson = await wrapper.getAttribute("data-media")
+                if (mediaJson) id = JSON.parse(mediaJson).id
+            } catch (e) {
+                $debug.error("[episode-overview-bar] could not parse detail media id", e)
+            }
+            if (!id) return
+            const c = await getCounts(id)
+            if (!c) return
+            const box = await makeBox(c, true, "8px 0 6px")
+            box.setAttribute("data-epov-detail-bar", "1")
+            view.before(box)
+        })
+
+        // Triggers: observe (dynamic mounts) + navigation + startup.
+        ctx.dom.observe(CARD_SELECTOR, () => scheduleGrid())
+        ctx.dom.observe(DETAIL_EPISODE_LIST_SELECTOR, () => scheduleDetail())
+        ctx.screen.onNavigate(() => {
+            scheduleGrid()
+            scheduleDetail()
+        })
+        scheduleGrid()
+        scheduleDetail()
     })
 }
