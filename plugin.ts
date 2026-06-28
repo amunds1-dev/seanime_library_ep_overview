@@ -44,22 +44,20 @@ function init() {
         }
 
         // Tray icon = the plugin's settings surface (holds the toggle).
-        const tray = ctx.newTray({
-            iconUrl: "https://raw.githubusercontent.com/amunds1-dev/seanime_library_ep_overview/main/icon.svg",
-            withContent: true,
-            width: "320px",
-        })
-        tray.render(() => {
+        // Icon is a data URI (raw GitHub serves .svg as text/plain, which <img> won't render).
+        const ICON =
+            "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSI+PGxpbmUgeDE9IjQiIHkxPSIyMCIgeDI9IjIwIiB5Mj0iMjAiIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48cmVjdCB4PSI1IiB5PSIxMiIgd2lkdGg9IjMuNSIgaGVpZ2h0PSI2IiByeD0iMSIgZmlsbD0iI2ZmZmZmZiIvPjxyZWN0IHg9IjEwLjI1IiB5PSI4IiB3aWR0aD0iMy41IiBoZWlnaHQ9IjEwIiByeD0iMSIgZmlsbD0iI2ZmZmZmZiIvPjxyZWN0IHg9IjE1LjUiIHk9IjQiIHdpZHRoPSIzLjUiIGhlaWdodD0iMTQiIHJ4PSIxIiBmaWxsPSIjZmZmZmZmIi8+PC9zdmc+"
+        const diagRef = settings.fieldRef("diagnostics")
+        const tray = ctx.newTray({ iconUrl: ICON, withContent: true, width: "320px" })
+        tray.render(() =>
             tray.stack([
-                tray.text({ text: "Episode Overview Bar" }),
-                tray.text({
-                    text: "Diagnostic toasts report matched/injected card counts. Leave off for normal use.",
-                }),
-                tray.switch({ label: "Show diagnostic toasts", fieldRef: settings.fieldRef("diagnostics") }),
-            ])
-        })
+                tray.text("Episode Overview Bar"),
+                tray.text("Diagnostic toasts report matched/injected card counts. Leave off for normal use."),
+                tray.switch("Show diagnostic toasts", { fieldRef: diagRef }),
+            ]),
+        )
 
-        diag("Episode Overview Bar v0.2.0 active")
+        diag("Episode Overview Bar v0.2.1 active")
 
         // ── Theme-aware colors (resolve against Seanime's CSS variables) ──────
         // To restyle, edit these. var(--brand) follows the user's accent color;
@@ -67,8 +65,8 @@ function init() {
         const COLORS = {
             track: "rgb(var(--color-gray-500) / 0.22)", // total backdrop
             aired: "rgb(var(--color-gray-200) / 0.32)", // aired fill
-            watched: "var(--brand)", // watched — follows the app accent
-            library: "#16a34a", // in-library (semantic green)
+            watched: "rgb(var(--color-brand-300))", // watched — light purple (accent)
+            library: "rgb(var(--color-brand-700))", // in-library — darker purple (accent)
             segment: "rgb(var(--color-gray-950) / 0.40)", // segment dividers
         }
 
@@ -217,7 +215,9 @@ function init() {
 
         // ── 1. Library / Home grid ───────────────────────────────────────────
         async function injectCard(card: $ui.DOMElement): Promise<boolean> {
-            if (await readAttr(card, "data-epov")) return false
+            // Live read (not the snapshot): a marker set by a concurrent pass must
+            // be visible here, otherwise observe + sweep can both inject = duplicate.
+            if (await card.getAttribute("data-epov")) return false
             const type = await readAttr(card, "data-media-type")
             if (type && type !== "anime") {
                 card.setAttribute("data-epov", "skip") // manga etc.
@@ -226,11 +226,12 @@ function init() {
             const idStr = await readAttr(card, "data-media-id")
             const id = idStr ? parseInt(idStr, 10) : NaN
             if (!id || isNaN(id)) return false
-            card.setAttribute("data-epov", "1") // mark before await to avoid races
+            card.setAttribute("data-epov", "1") // claim early to block other passes
             const c = await getCounts(id)
             if (!c) return false
+            // Final guard against a racing pass that already added a bar to this card.
+            if (await card.queryOne("[data-epov-bar]")) return false
             const box = await makeBox(c, false, "4px 2px 2px")
-            box.setAttribute("data-epov-bar", "1") // searchable in DevTools
             const title = await card.queryOne(CARD_TITLE_SELECTOR)
             if (title) title.append(box)
             else card.append(box)
