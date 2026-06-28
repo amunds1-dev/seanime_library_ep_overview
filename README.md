@@ -57,8 +57,30 @@ Both use `ctx.dom.observe()` (a mutation observer), so bars appear as cards/page
 npx -y -p typescript@5.4 tsc --noEmit --target ES2018 --lib ES2018 --skipLibCheck --strict false plugin.ts
 ```
 
-## Known limitations (v0.1)
+## Colors & theming
+
+Colors live in the `COLORS` object near the top of `plugin.ts` and use Seanime's CSS
+variables, so they follow the app theme automatically:
+
+- `watched` = `var(--brand)` — follows your accent color in Seanime settings
+- `track` / `aired` = `rgb(var(--color-gray-*) / a)` — adapt to light/dark
+- `library` = a fixed green (semantic "in your library"); change to `var(--brand)` shades
+  if you want it to track the accent too
+
+## Diagnostics toggle
+
+The plugin adds a **tray icon** (bar-chart). Open it to toggle **"Show diagnostic
+toasts"** — off by default. When on, it shows matched/injected card counts (useful if the
+bar ever stops appearing). `$debug.log` output always goes to Seanime's server logs.
+
+## Performance
+
+Card data is fetched once per anime and cached; injection reads attributes from the query
+snapshot, renders each bar in ~2 client messages, and runs with bounded concurrency, so
+bars populate quickly as cards appear.
+
+## Known limitations
 
 - Counts are cached per session; reload to refresh after watching/downloading.
 - The "in library" count under Nakama is computed but not yet verified against a live
-  host+peer setup — the main thing to confirm on first run.
+  host+peer setup.

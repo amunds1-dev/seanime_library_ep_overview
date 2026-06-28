@@ -6,18 +6,22 @@
 // Episode Overview Bar
 // --------------------
 // A 3-layer progress bar + exact counts, injected onto:
-//   1. Library grid cards  (div[data-media-entry-card-container][data-media-id])
-//   2. Anime detail page    (before [data-anime-entry-page-episode-list-view])
+//   1. Library / Home grid cards  (below the cover + title)
+//   2. Anime detail page          (above the episode list)
 //
 // Layers (bar is conceptually divided into TOTAL equal segments):
-//   - track  (grey)        = total episodes
+//   - track  (theme grey)  = total episodes
 //   - aired  (light fill)  = episodes aired so far
 //   - library(green strip) = episodes present in the local library (slim, bottom)
-//   - watched(green fill)  = episodes watched (AniList progress)
+//   - watched(accent fill) = episodes watched (AniList progress) — follows --brand
 //
-// All data comes from ctx.anime.getAnimeEntry(mediaId) -> $app.Anime_Entry,
-// which requires NO permission scope and is Nakama-aware (see getLibraryCount).
+// Colors use Seanime CSS variables, so they follow the app theme automatically.
+// Data comes from ctx.anime.getAnimeEntry(mediaId) (no scopes, Nakama-aware).
+// A tray icon exposes a "diagnostics" toggle for the temporary debug toasts.
 // Confirmed against Seanime v3.8.7 (Kanata).
+//
+// NOTE: Seanime stringifies this $ui.register callback and re-evaluates it in
+// isolation, so everything it uses must live INSIDE this function body.
 
 type Counts = {
     total: number
@@ -28,9 +32,45 @@ type Counts = {
 
 function init() {
     $ui.register((ctx) => {
-        // IMPORTANT: Seanime stringifies this callback and re-evaluates it, so it
-        // cannot see module-level declarations. Everything it uses must live INSIDE
-        // this function body. (That's why the constants below are defined here.)
+        // ── Settings + diagnostics toggle ────────────────────────────────────
+        const settings = ctx.settings.define("config", { diagnostics: false })
+        let diagnostics = !!settings.get("diagnostics")
+        settings.watch((v) => {
+            diagnostics = !!v.diagnostics
+        })
+        function diag(msg: string) {
+            $debug.log("[episode-overview-bar] " + msg)
+            if (diagnostics) ctx.toast.info(msg)
+        }
+
+        // Tray icon = the plugin's settings surface (holds the toggle).
+        const tray = ctx.newTray({
+            iconUrl: "https://raw.githubusercontent.com/amunds1-dev/seanime_library_ep_overview/main/icon.svg",
+            withContent: true,
+            width: "320px",
+        })
+        tray.render(() => {
+            tray.stack([
+                tray.text({ text: "Episode Overview Bar" }),
+                tray.text({
+                    text: "Diagnostic toasts report matched/injected card counts. Leave off for normal use.",
+                }),
+                tray.switch({ label: "Show diagnostic toasts", fieldRef: settings.fieldRef("diagnostics") }),
+            ])
+        })
+
+        diag("Episode Overview Bar v0.2.0 active")
+
+        // ── Theme-aware colors (resolve against Seanime's CSS variables) ──────
+        // To restyle, edit these. var(--brand) follows the user's accent color;
+        // rgb(var(--color-*-NNN) / a) uses Seanime's palette with custom opacity.
+        const COLORS = {
+            track: "rgb(var(--color-gray-500) / 0.22)", // total backdrop
+            aired: "rgb(var(--color-gray-200) / 0.32)", // aired fill
+            watched: "var(--brand)", // watched — follows the app accent
+            library: "#16a34a", // in-library (semantic green)
+            segment: "rgb(var(--color-gray-950) / 0.40)", // segment dividers
+        }
 
         // ── Selectors (confirmed from v3.8.7 frontend source) ────────────────
         const CARD_SELECTOR = "[data-media-entry-card-container]"
@@ -38,27 +78,13 @@ function init() {
         const DETAIL_EPISODE_LIST_SELECTOR = "[data-anime-entry-page-episode-list-view]"
         const DETAIL_PAGE_WRAPPER_SELECTOR = "[data-anime-entry-page]"
 
-        // ── Colors ───────────────────────────────────────────────────────────
-        const COLORS = {
-            track: "rgba(255,255,255,0.12)", // grey backdrop = total
-            aired: "rgba(255,255,255,0.34)", // aired fill
-            library: "#1f7a3d", // dark green slim bar = in library
-            watched: "#4ade80", // light green fill = watched
-            segment: "rgba(0,0,0,0.40)", // segment dividers
-        }
-
-        // Per-media cache so scrolling / re-renders don't refetch.
-        // NOTE: counts are cached for the session; reload to refresh after watching.
+        // ── Data layer ───────────────────────────────────────────────────────
         const cache: Record<number, Counts | null> = {}
-
-        // TEMP diagnostics (remove once the card bar is confirmed working).
-        ctx.toast.info("Episode Overview Bar v0.1.4 active")
 
         function computeCounts(entry: $app.Anime_Entry): Counts {
             const media = entry.media
             const total = media?.episodes ?? 0
 
-            // Aired = (next airing episode - 1); if no schedule, assume all aired.
             let aired = total
             if (media?.nextAiringEpisode?.episode) {
                 aired = Math.max(0, media.nextAiringEpisode.episode - 1)
@@ -67,10 +93,9 @@ function init() {
 
             const watched = entry.listData?.progress ?? 0
 
-            // In library: mainFileCount = number of main episode files held locally.
-            // Under Nakama (browsing a shared host library on this client), the local
-            // count is 0 but nakamaLibraryData reports the host's available episodes,
-            // so we take whichever is larger to reflect what's actually reachable.
+            // In library: mainFileCount = main episode files held locally. Under
+            // Nakama, the local count may be 0 while nakamaLibraryData reports the
+            // host's shared episodes, so take whichever is larger.
             let library = entry.libraryData?.mainFileCount ?? 0
             if (entry._isNakamaEntry) {
                 const nakama = entry.nakamaLibraryData?.mainFileCount ?? 0
@@ -94,7 +119,7 @@ function init() {
             }
         }
 
-        // ── Rendering (single setInnerHTML per bar) ──────────────────────────
+        // ── Rendering ────────────────────────────────────────────────────────
         function pct(part: number, denom: number): number {
             if (denom <= 0) return 0
             const p = (part / denom) * 100
@@ -122,7 +147,7 @@ function init() {
                 `<div style="position:absolute;left:0;top:0;bottom:0;width:${pct(c.aired, denom)}%;` +
                 `background:${COLORS.aired}"></div>` +
                 `<div style="position:absolute;left:0;top:0;bottom:0;width:${pct(c.watched, denom)}%;` +
-                `background:${COLORS.watched};opacity:.85"></div>` +
+                `background:${COLORS.watched};opacity:.9"></div>` +
                 `<div style="position:absolute;left:0;bottom:0;height:3px;width:${pct(c.library, denom)}%;` +
                 `background:${COLORS.library}"></div>` +
                 segs +
@@ -133,50 +158,97 @@ function init() {
             )
         }
 
+        // One createElement + one setInnerHTML (the styled wrapper + marker live
+        // inside the HTML), so each bar costs only ~2 client messages.
         async function makeBox(c: Counts, big: boolean, padding: string): Promise<$ui.DOMElement> {
             const box = await ctx.dom.createElement("div")
-            box.setStyle("width", "100%")
-            box.setStyle("padding", padding)
-            box.setStyle("box-sizing", "border-box")
-            box.setInnerHTML(renderBarHTML(c, big))
+            box.setInnerHTML(
+                `<div data-epov-bar="1" style="width:100%;padding:${padding};box-sizing:border-box">` +
+                    renderBarHTML(c, big) +
+                    `</div>`,
+            )
             return box
         }
 
-        // ── 1. Library grid ──────────────────────────────────────────────────
-        // Injected boxes carry data-epov-bar="1" so they're findable in DevTools
-        // Elements (Ctrl+F "epov-bar").
+        // Read an attribute from the query snapshot if present (no round-trip),
+        // else fetch it live.
+        async function readAttr(el: $ui.DOMElement, name: string): Promise<string | null> {
+            const a = el.attributes
+            if (a && Object.prototype.hasOwnProperty.call(a, name)) return a[name]
+            return await el.getAttribute(name)
+        }
+
+        // Run async work over items with bounded concurrency; resolves with the
+        // count of truthy results.
+        function mapLimit(
+            items: $ui.DOMElement[],
+            limit: number,
+            fn: (item: $ui.DOMElement) => Promise<boolean>,
+        ): Promise<number> {
+            return new Promise((resolve) => {
+                if (items.length === 0) {
+                    resolve(0)
+                    return
+                }
+                let i = 0
+                let active = 0
+                let done = 0
+                let count = 0
+                function launch() {
+                    while (active < limit && i < items.length) {
+                        const item = items[i++]
+                        active++
+                        fn(item)
+                            .then((r) => {
+                                if (r) count++
+                            })
+                            .catch(() => {})
+                            .then(() => {
+                                active--
+                                done++
+                                if (done === items.length) resolve(count)
+                                else launch()
+                            })
+                    }
+                }
+                launch()
+            })
+        }
+
+        // ── 1. Library / Home grid ───────────────────────────────────────────
         async function injectCard(card: $ui.DOMElement): Promise<boolean> {
-            // NOTE: use getAttribute("data-…") not getDataAttribute("media-id");
-            // the dataset-style helper needs camelCase for hyphenated keys, so
-            // getDataAttribute("media-id") returns null (cause of matched>0, injected 0).
-            if (await card.getAttribute("data-epov")) return false
-            const type = await card.getAttribute("data-media-type")
+            if (await readAttr(card, "data-epov")) return false
+            const type = await readAttr(card, "data-media-type")
             if (type && type !== "anime") {
                 card.setAttribute("data-epov", "skip") // manga etc.
                 return false
             }
-            const idStr = await card.getAttribute("data-media-id")
+            const idStr = await readAttr(card, "data-media-id")
             const id = idStr ? parseInt(idStr, 10) : NaN
             if (!id || isNaN(id)) return false
             card.setAttribute("data-epov", "1") // mark before await to avoid races
             const c = await getCounts(id)
             if (!c) return false
             const box = await makeBox(c, false, "4px 2px 2px")
-            box.setAttribute("data-epov-bar", "1")
-            // Prefer the title section so the bar flows below the cover + title.
+            box.setAttribute("data-epov-bar", "1") // searchable in DevTools
             const title = await card.queryOne(CARD_TITLE_SELECTOR)
             if (title) title.append(box)
             else card.append(box)
             return true
         }
 
-        let lastGridReport = ""
-        async function reportGrid(source: string, matched: number, injected: number) {
-            const report = source + ": matched " + matched + " injected " + injected
-            $debug.log("[episode-overview-bar] grid " + report)
-            if (report !== lastGridReport) {
-                lastGridReport = report
-                ctx.toast.info("EpOverview grid " + report)
+        let lastReport = ""
+        async function processCards(cards: $ui.DOMElement[], source: string) {
+            const injected = await mapLimit(cards, 6, (card) =>
+                injectCard(card).catch((e) => {
+                    $debug.error("[episode-overview-bar] grid inject error", e)
+                    return false
+                }),
+            )
+            const report = source + ": matched " + cards.length + " injected " + injected
+            if (report !== lastReport) {
+                lastReport = report
+                diag("EpOverview grid " + report)
             }
         }
 
@@ -188,48 +260,28 @@ function init() {
                 $debug.error("[episode-overview-bar] grid query failed", e)
                 return
             }
-            let injected = 0
-            for (const card of cards) {
-                try {
-                    if (await injectCard(card)) injected++
-                } catch (e) {
-                    $debug.error("[episode-overview-bar] grid inject error", e)
-                }
-            }
-            await reportGrid(source, cards.length, injected)
+            await processCards(cards, source)
         }
 
         // observe handles cards added later (scrolling a carousel, route changes)
-        ctx.dom.observe(CARD_SELECTOR, async (cards) => {
-            let injected = 0
-            for (const card of cards) {
-                try {
-                    if (await injectCard(card)) injected++
-                } catch (e) {
-                    $debug.error("[episode-overview-bar] grid inject error", e)
-                }
-            }
-            await reportGrid("observe", cards.length, injected)
+        ctx.dom.observe(CARD_SELECTOR, (cards) => {
+            void processCards(cards, "observe")
         })
-
-        // Active sweeps cover cards already present when a route mounts, which
-        // observe may not re-report on client-side navigation.
+        // active sweeps cover cards already present when a route mounts
         ctx.screen.onNavigate(() => {
             void sweepGrid("nav")
         })
         void sweepGrid("startup")
 
         // ── 2. Detail page ───────────────────────────────────────────────────
-        // Inject above the episode list. Media id is read from the page wrapper's
-        // serialized media JSON (data-media), so it works regardless of route timing.
         ctx.dom.observe(DETAIL_EPISODE_LIST_SELECTOR, async (views) => {
             for (const view of views) {
-                if (await view.getAttribute("data-epov-detail")) continue
+                if (await readAttr(view, "data-epov-detail")) continue
                 const wrapper = await ctx.dom.queryOne(DETAIL_PAGE_WRAPPER_SELECTOR)
                 if (!wrapper) continue
                 let id = 0
                 try {
-                    const mediaJson = await wrapper.getAttribute("data-media")
+                    const mediaJson = await readAttr(wrapper, "data-media")
                     if (mediaJson) id = JSON.parse(mediaJson).id
                 } catch (e) {
                     $debug.error("[episode-overview-bar] could not parse detail media id", e)
