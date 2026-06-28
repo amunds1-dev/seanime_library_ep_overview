@@ -52,7 +52,7 @@ function init() {
         const cache: Record<number, Counts | null> = {}
 
         // TEMP diagnostics (remove once the card bar is confirmed working).
-        ctx.toast.info("Episode Overview Bar v0.1.3 active")
+        ctx.toast.info("Episode Overview Bar v0.1.4 active")
 
         function computeCounts(entry: $app.Anime_Entry): Counts {
             const media = entry.media
@@ -146,20 +146,23 @@ function init() {
         // Injected boxes carry data-epov-bar="1" so they're findable in DevTools
         // Elements (Ctrl+F "epov-bar").
         async function injectCard(card: $ui.DOMElement): Promise<boolean> {
-            if (await card.getDataAttribute("epov")) return false
-            const type = await card.getDataAttribute("media-type")
+            // NOTE: use getAttribute("data-…") not getDataAttribute("media-id");
+            // the dataset-style helper needs camelCase for hyphenated keys, so
+            // getDataAttribute("media-id") returns null (cause of matched>0, injected 0).
+            if (await card.getAttribute("data-epov")) return false
+            const type = await card.getAttribute("data-media-type")
             if (type && type !== "anime") {
-                card.setDataAttribute("epov", "skip") // manga etc.
+                card.setAttribute("data-epov", "skip") // manga etc.
                 return false
             }
-            const idStr = await card.getDataAttribute("media-id")
+            const idStr = await card.getAttribute("data-media-id")
             const id = idStr ? parseInt(idStr, 10) : NaN
             if (!id || isNaN(id)) return false
-            card.setDataAttribute("epov", "1") // mark before await to avoid races
+            card.setAttribute("data-epov", "1") // mark before await to avoid races
             const c = await getCounts(id)
             if (!c) return false
             const box = await makeBox(c, false, "4px 2px 2px")
-            box.setDataAttribute("epov-bar", "1")
+            box.setAttribute("data-epov-bar", "1")
             // Prefer the title section so the bar flows below the cover + title.
             const title = await card.queryOne(CARD_TITLE_SELECTOR)
             if (title) title.append(box)
@@ -221,18 +224,18 @@ function init() {
         // serialized media JSON (data-media), so it works regardless of route timing.
         ctx.dom.observe(DETAIL_EPISODE_LIST_SELECTOR, async (views) => {
             for (const view of views) {
-                if (await view.getDataAttribute("epovDetail")) continue
+                if (await view.getAttribute("data-epov-detail")) continue
                 const wrapper = await ctx.dom.queryOne(DETAIL_PAGE_WRAPPER_SELECTOR)
                 if (!wrapper) continue
                 let id = 0
                 try {
-                    const mediaJson = await wrapper.getDataAttribute("media")
+                    const mediaJson = await wrapper.getAttribute("data-media")
                     if (mediaJson) id = JSON.parse(mediaJson).id
                 } catch (e) {
                     $debug.error("[episode-overview-bar] could not parse detail media id", e)
                 }
                 if (!id) continue
-                view.setDataAttribute("epovDetail", "1")
+                view.setAttribute("data-epov-detail", "1")
                 const c = await getCounts(id)
                 if (!c) continue
                 view.before(await makeBox(c, true, "8px 0 6px"))
