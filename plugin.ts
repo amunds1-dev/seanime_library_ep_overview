@@ -38,13 +38,13 @@ function init() {
     $ui.register((ctx) => {
         // ── Settings + diagnostics toggle ────────────────────────────────────
         const settings = ctx.settings.define("config", { diagnostics: false })
-        let diagnostics = !!settings.get("diagnostics")
-        settings.watch((v) => {
-            diagnostics = !!v.diagnostics
-        })
         function diag(msg: string) {
             $debug.log("[episode-overview-bar] " + msg)
-            if (diagnostics) ctx.toast.info(msg)
+            try {
+                if (settings.get("diagnostics")) ctx.toast.info(msg)
+            } catch (e) {
+                /* ignore */
+            }
         }
 
         // Tray icon = the plugin's settings surface (holds the toggle).
@@ -61,7 +61,7 @@ function init() {
             ]),
         )
 
-        diag("Episode Overview Bar v0.3.0 active")
+        diag("Episode Overview Bar v0.3.1 active")
 
         // ── Theme-aware colors (resolve against Seanime's CSS variables) ──────
         // To restyle, edit these. var(--brand) follows the user's accent color;
@@ -266,11 +266,12 @@ function init() {
             })
         }
 
-        // ── Serialized runner (debounce + no-overlap) ────────────────────────
+        // ── Serialized runner (no-overlap) ───────────────────────────────────
         // Three near-simultaneous passes (observe + navigate + startup) could each
         // read "no bar yet" before any of them wrote, producing duplicate bars.
-        // A debounced single-runner collapses bursts and guarantees reconciles
-        // never overlap; a trailing run handles items that mounted mid-reconcile.
+        // The synchronous running/rerun flags guarantee reconciles never overlap;
+        // bursts of triggers during a run collapse into one trailing run. (Called
+        // directly — no ctx.jobs dependency, which previously stopped it running.)
         function makeRunner(key: string, fn: () => Promise<void>): () => void {
             let running = false
             let rerun = false
@@ -292,7 +293,7 @@ function init() {
                     }
                 }
             }
-            return () => ctx.jobs.debounce("epov-" + key, () => void run(), 120)
+            return run
         }
 
         // ── 1. Library / Home grid ───────────────────────────────────────────
