@@ -19,20 +19,6 @@
 // which requires NO permission scope and is Nakama-aware (see getLibraryCount).
 // Confirmed against Seanime v3.8.7 (Kanata).
 
-// ── Selectors (confirmed from v3.8.7 frontend source) ────────────────────────
-const CARD_SELECTOR = '[data-media-entry-card-container][data-media-type="anime"]'
-const DETAIL_EPISODE_LIST_SELECTOR = "[data-anime-entry-page-episode-list-view]"
-const DETAIL_PAGE_WRAPPER_SELECTOR = "[data-anime-entry-page]"
-
-// ── Colors ───────────────────────────────────────────────────────────────────
-const COLORS = {
-    track: "rgba(255,255,255,0.12)", // grey backdrop = total
-    aired: "rgba(255,255,255,0.34)", // aired fill
-    library: "#1f7a3d", // dark green slim bar = in library
-    watched: "#4ade80", // light green fill = watched
-    segment: "rgba(0,0,0,0.40)", // segment dividers
-}
-
 type Counts = {
     total: number
     aired: number
@@ -42,6 +28,24 @@ type Counts = {
 
 function init() {
     $ui.register((ctx) => {
+        // IMPORTANT: Seanime stringifies this callback and re-evaluates it, so it
+        // cannot see module-level declarations. Everything it uses must live INSIDE
+        // this function body. (That's why the constants below are defined here.)
+
+        // ── Selectors (confirmed from v3.8.7 frontend source) ────────────────
+        const CARD_SELECTOR = '[data-media-entry-card-container][data-media-type="anime"]'
+        const DETAIL_EPISODE_LIST_SELECTOR = "[data-anime-entry-page-episode-list-view]"
+        const DETAIL_PAGE_WRAPPER_SELECTOR = "[data-anime-entry-page]"
+
+        // ── Colors ───────────────────────────────────────────────────────────
+        const COLORS = {
+            track: "rgba(255,255,255,0.12)", // grey backdrop = total
+            aired: "rgba(255,255,255,0.34)", // aired fill
+            library: "#1f7a3d", // dark green slim bar = in library
+            watched: "#4ade80", // light green fill = watched
+            segment: "rgba(0,0,0,0.40)", // segment dividers
+        }
+
         // Per-media cache so scrolling / re-renders don't refetch.
         // NOTE: counts are cached for the session; reload to refresh after watching.
         const cache: Record<number, Counts | null> = {}
