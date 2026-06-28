@@ -33,7 +33,8 @@ function init() {
         // this function body. (That's why the constants below are defined here.)
 
         // ── Selectors (confirmed from v3.8.7 frontend source) ────────────────
-        const CARD_SELECTOR = '[data-media-entry-card-container][data-media-type="anime"]'
+        const CARD_SELECTOR = "[data-media-entry-card-container]"
+        const CARD_TITLE_SELECTOR = "[data-media-entry-card-title-section]"
         const DETAIL_EPISODE_LIST_SELECTOR = "[data-anime-entry-page-episode-list-view]"
         const DETAIL_PAGE_WRAPPER_SELECTOR = "[data-anime-entry-page]"
 
@@ -140,16 +141,33 @@ function init() {
 
         // ── 1. Library grid ──────────────────────────────────────────────────
         ctx.dom.observe(CARD_SELECTOR, async (cards) => {
+            $debug.log("[episode-overview-bar] grid observe fired; cards=" + cards.length)
+            let injected = 0
             for (const card of cards) {
-                if (await card.getDataAttribute("epov")) continue
-                const idStr = await card.getDataAttribute("media-id")
-                const id = idStr ? parseInt(idStr, 10) : NaN
-                if (!id || isNaN(id)) continue
-                card.setDataAttribute("epov", "1") // mark before await to avoid races
-                const c = await getCounts(id)
-                if (!c) continue
-                card.append(await makeBox(c, false, "2px 4px 4px"))
+                try {
+                    if (await card.getDataAttribute("epov")) continue
+                    const type = await card.getDataAttribute("media-type")
+                    if (type && type !== "anime") {
+                        card.setDataAttribute("epov", "skip") // manga etc.
+                        continue
+                    }
+                    const idStr = await card.getDataAttribute("media-id")
+                    const id = idStr ? parseInt(idStr, 10) : NaN
+                    if (!id || isNaN(id)) continue
+                    card.setDataAttribute("epov", "1") // mark before await to avoid races
+                    const c = await getCounts(id)
+                    if (!c) continue
+                    const box = await makeBox(c, false, "4px 2px 2px")
+                    // Prefer the title section so the bar flows below the cover + title.
+                    const title = await card.queryOne(CARD_TITLE_SELECTOR)
+                    if (title) title.append(box)
+                    else card.append(box)
+                    injected++
+                } catch (e) {
+                    $debug.error("[episode-overview-bar] grid inject error", e)
+                }
             }
+            $debug.log("[episode-overview-bar] grid injected=" + injected)
         })
 
         // ── 2. Detail page ───────────────────────────────────────────────────
