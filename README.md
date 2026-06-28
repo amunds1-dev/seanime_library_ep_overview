@@ -1,55 +1,64 @@
 # Episode Overview Bar — Seanime plugin
 
-Adds a 3-layer progress bar with exact counts to anime **library cards** (and, next,
-the **anime detail page**), so you can see at a glance:
+Adds a 3-layer progress bar with exact counts to your anime **library cards** and the
+**anime detail page**, so you can see at a glance:
 
-- **Total** episodes for the show/season (grey track, split into equal segments)
-- **Aired** episodes so far (dark fill)
-- **In library** — episodes present locally (slim dark-green bottom strip)
-- **Watched** — your AniList progress (light-green fill)
+- **Total** episodes for the show/season — grey track, split into equal segments
+- **Aired** episodes so far — light fill
+- **In library** — episodes available locally (or via the Nakama host) — slim dark-green strip
+- **Watched** — your AniList progress — light-green fill
 
 Plus a caption: `24 total · 18 aired · 12 in library · 9 watched`.
 
 ## Files
 
-- `episode-overview-bar.json` — the extension manifest (this is the URL users install)
-- `plugin.ts` — the plugin source code (referenced by `payloadURI`)
+| File | Purpose |
+|------|---------|
+| `episode-overview-bar.json` | Extension manifest (the URL users install) |
+| `plugin.ts` | Plugin source |
+| `types/*.d.ts` | Seanime's official plugin typings (for editor/typecheck only) |
 
-## Install (development / local testing)
+## How it works
 
-1. Make sure your Seanime version supports plugins and that the plugin UI is enabled
-   in Settings → Extensions.
-2. In `episode-overview-bar.json`, the `isDevelopment` flag is `true`. Set
-   `payloadURI` to the **absolute local path** of `plugin.ts` on this machine, e.g.
-   `file:///C:/Users/kanth/ClaudeCode/Seanime_Ep_Bar/plugin.ts`
-   (or the path your Seanime build expects for dev plugins).
-3. In Seanime, add the extension via the manifest file (Extensions → add from file/URL),
-   grant the requested permissions (`anilist`, `anime`), then reload.
-4. Open the library — bars should appear on cards. Use the browser devtools console
-   to see any `[episode-overview-bar]` log lines.
+All data comes from a single `ctx.anime.getAnimeEntry(mediaId)` call per entry
+(`$app.Anime_Entry`), which needs **no permission scopes** and is **Nakama-aware**:
 
-## Publish (hosting on your GitHub repo)
+- **Total** = `media.episodes`
+- **Aired** = `media.nextAiringEpisode.episode − 1` (or all, if finished/no schedule)
+- **Watched** = `listData.progress`
+- **In library** = `libraryData.mainFileCount`; for Nakama entries it also considers
+  `nakamaLibraryData.mainFileCount` (host's shared episodes) and takes the larger value
 
-1. Push both files to your repo.
-2. In the manifest: remove `isDevelopment`, and set `payloadURI` to the **raw** GitHub
-   URL of `plugin.ts`, e.g.
-   `https://raw.githubusercontent.com/<you>/<repo>/main/plugin.ts`
-3. Share the **raw URL of the manifest** (`episode-overview-bar.json`) — that's what
-   users add as a custom extension.
+Injection points were confirmed against the **v3.8.7 (Kanata)** frontend source:
 
-## Still to verify against your Seanime build
+- Grid: `div[data-media-entry-card-container][data-media-id][data-media-type="anime"]`
+- Detail: inserted before `[data-anime-entry-page-episode-list-view]`, media id read
+  from the `[data-anime-entry-page]` wrapper's serialized `data-media`
 
-Search `plugin.ts` for `VERIFY:`. Card selection is now confirmed from the v3.8.7
-source; two API-side items remain:
+Both use `ctx.dom.observe()` (a mutation observer), so bars appear as cards/pages render.
 
-1. ~~Card selector~~ — **confirmed** against v3.8.7: cards are
-   `div[data-media-entry-card-container][data-media-id="NN"][data-media-type="anime"]`.
-2. **Local library count** — uses `$anime.getEpisodeCollection(id).episodes.length`.
-   Confirm this equals downloaded episodes on your build (and that the `anime`
-   permission scope is the correct one for it).
-3. **Detail page container** — the `onNavigate('/entry')` branch is stubbed; the entry
-   route is `/entry?id=NN`. Phase 2 will append a larger bar near
-   `[data-media-entry-card-title-section]`'s detail-page equivalent.
+## Install — development (fast iteration)
 
-The only confirmation left is a quick devtools check on your running instance that the
-bar appears and the counts look right.
+1. Seanime → **Settings → Extensions**, make sure plugins are enabled.
+2. Keep `"isDevelopment": true` in the manifest and set `payloadURI` to the local file,
+   e.g. `file:///C:/Users/kanth/ClaudeCode/Seanime_Ep_Bar/plugin.ts`.
+3. Add the extension from the manifest, reload. No permissions are requested.
+
+## Install — from GitHub (normal use)
+
+1. Push this repo. The manifest already points `payloadURI` at
+   `https://raw.githubusercontent.com/amunds1-dev/seanime_library_ep_overview/main/plugin.ts`.
+2. Remove (or set false) `"isDevelopment"` in the manifest for the published copy.
+3. In Seanime, add a custom extension using the **raw URL of `episode-overview-bar.json`**.
+
+## Typecheck
+
+```
+npx -y -p typescript@5.4 tsc --noEmit --target ES2018 --lib ES2018 --skipLibCheck --strict false plugin.ts
+```
+
+## Known limitations (v0.1)
+
+- Counts are cached per session; reload to refresh after watching/downloading.
+- The "in library" count under Nakama is computed but not yet verified against a live
+  host+peer setup — the main thing to confirm on first run.

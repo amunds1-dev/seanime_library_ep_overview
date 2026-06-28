@@ -1,36 +1,36 @@
-/// <reference path="./plugin.d.ts" />
+/// <reference path="./types/plugin.d.ts" />
+/// <reference path="./types/system.d.ts" />
+/// <reference path="./types/app.d.ts" />
+/// <reference path="./types/core.d.ts" />
 //
 // Episode Overview Bar
 // --------------------
-// Injects a 3-layer progress bar + exact counts onto:
-//   1. Library grid cards  (priority 1)
-//   2. Anime detail page   (priority 2)
+// A 3-layer progress bar + exact counts, injected onto:
+//   1. Library grid cards  (div[data-media-entry-card-container][data-media-id])
+//   2. Anime detail page    (before [data-anime-entry-page-episode-list-view])
 //
-// Each bar is divided conceptually into TOTAL equal segments and shows:
-//   - track (grey)            = total episodes
-//   - aired fill (dark grey)  = episodes that have aired so far
-//   - library bar (dark grpn) = episodes present in the local library  (slim, bottom strip)
-//   - watched fill (lt green) = episodes watched (AniList progress)
+// Layers (bar is conceptually divided into TOTAL equal segments):
+//   - track  (grey)        = total episodes
+//   - aired  (light fill)  = episodes aired so far
+//   - library(green strip) = episodes present in the local library (slim, bottom)
+//   - watched(green fill)  = episodes watched (AniList progress)
 //
-// ─────────────────────────────────────────────────────────────────────────────
-// THINGS TO VERIFY AGAINST YOUR SEANIME VERSION (search for "VERIFY:")
-//   1. CARD_SELECTOR / how a card links to /entry?id=<mediaId>
-//   2. The container element on the detail page to append the bar to
-//   3. How the local-library episode count is obtained (getEpisodeCollection)
-// ─────────────────────────────────────────────────────────────────────────────
+// All data comes from ctx.anime.getAnimeEntry(mediaId) -> $app.Anime_Entry,
+// which requires NO permission scope and is Nakama-aware (see getLibraryCount).
+// Confirmed against Seanime v3.8.7 (Kanata).
 
-// Confirmed against Seanime v3.8.7 (Kanata): each library card is a
-//   <div data-media-entry-card-container data-media-id="NN" data-media-type="anime" ...>
-// We append our bar to that container, after its title section.
+// ── Selectors (confirmed from v3.8.7 frontend source) ────────────────────────
 const CARD_SELECTOR = '[data-media-entry-card-container][data-media-type="anime"]'
+const DETAIL_EPISODE_LIST_SELECTOR = "[data-anime-entry-page-episode-list-view]"
+const DETAIL_PAGE_WRAPPER_SELECTOR = "[data-anime-entry-page]"
 
-// Visual config
+// ── Colors ───────────────────────────────────────────────────────────────────
 const COLORS = {
-    track: "rgba(255,255,255,0.12)", // grey backdrop / total
-    aired: "rgba(255,255,255,0.35)", // dark-ish fill for aired
-    library: "#1f7a3d", // dark green slim bar
-    watched: "#4ade80", // light green watched fill
-    segment: "rgba(0,0,0,0.35)", // segment divider lines
+    track: "rgba(255,255,255,0.12)", // grey backdrop = total
+    aired: "rgba(255,255,255,0.34)", // aired fill
+    library: "#1f7a3d", // dark green slim bar = in library
+    watched: "#4ade80", // light green fill = watched
+    segment: "rgba(0,0,0,0.40)", // segment dividers
 }
 
 type Counts = {
@@ -41,171 +41,134 @@ type Counts = {
 }
 
 function init() {
-    $ui.register(async (ctx) => {
-        // ── Data layer ───────────────────────────────────────────────────────
-        // Pulled once; refreshed cheaply because getAnimeCollection is cached.
-        const counts = new Map<number, Counts>()
-        const libraryCache = new Map<number, number>() // mediaId -> downloaded count
+    $ui.register((ctx) => {
+        // Per-media cache so scrolling / re-renders don't refetch.
+        // NOTE: counts are cached for the session; reload to refresh after watching.
+        const cache: Record<number, Counts | null> = {}
 
-        async function loadCollection() {
+        function computeCounts(entry: $app.Anime_Entry): Counts {
+            const media = entry.media
+            const total = media?.episodes ?? 0
+
+            // Aired = (next airing episode - 1); if no schedule, assume all aired.
+            let aired = total
+            if (media?.nextAiringEpisode?.episode) {
+                aired = Math.max(0, media.nextAiringEpisode.episode - 1)
+            }
+            if (total > 0) aired = Math.min(aired, total)
+
+            const watched = entry.listData?.progress ?? 0
+
+            // In library: mainFileCount = number of main episode files held locally.
+            // Under Nakama (browsing a shared host library on this client), the local
+            // count is 0 but nakamaLibraryData reports the host's available episodes,
+            // so we take whichever is larger to reflect what's actually reachable.
+            let library = entry.libraryData?.mainFileCount ?? 0
+            if (entry._isNakamaEntry) {
+                const nakama = entry.nakamaLibraryData?.mainFileCount ?? 0
+                library = Math.max(library, nakama)
+            }
+
+            return { total, aired, library, watched }
+        }
+
+        async function getCounts(mediaId: number): Promise<Counts | null> {
+            if (mediaId in cache) return cache[mediaId]
             try {
-                const collection = await $anilist.getAnimeCollection(false)
-                const lists = collection?.MediaListCollection?.lists ?? []
-                for (const list of lists) {
-                    for (const entry of list?.entries ?? []) {
-                        const media = entry?.media
-                        if (!media?.id) continue
-                        const total = media.episodes ?? 0
-                        // aired = next airing episode - 1, else total when finished/no schedule
-                        const aired = media.nextAiringEpisode?.episode
-                            ? Math.max(0, media.nextAiringEpisode.episode - 1)
-                            : total
-                        counts.set(media.id, {
-                            total,
-                            aired,
-                            library: 0, // filled lazily per visible card
-                            watched: entry.progress ?? 0,
-                        })
-                    }
-                }
+                const entry = await ctx.anime.getAnimeEntry(mediaId)
+                const c = computeCounts(entry)
+                cache[mediaId] = c
+                return c
             } catch (e) {
-                console.error("[episode-overview-bar] failed to load collection", e)
+                $debug.error("[episode-overview-bar] getAnimeEntry failed", mediaId, e)
+                cache[mediaId] = null
+                return null
             }
         }
 
-        // VERIFY: confirm this returns the locally-available episodes for an entry.
-        // getEpisodeCollection returns the normalized episode collection; its
-        // length is the number of episodes present in the local library.
-        async function getLibraryCount(mediaId: number): Promise<number> {
-            if (libraryCache.has(mediaId)) return libraryCache.get(mediaId)!
-            let n = 0
-            try {
-                const ec = await $anime.getEpisodeCollection(mediaId)
-                n = ec?.episodes?.length ?? 0
-            } catch (e) {
-                console.error("[episode-overview-bar] episode collection failed", mediaId, e)
-            }
-            libraryCache.set(mediaId, n)
-            return n
+        // ── Rendering (single setInnerHTML per bar) ──────────────────────────
+        function pct(part: number, denom: number): number {
+            if (denom <= 0) return 0
+            const p = (part / denom) * 100
+            return Math.max(0, Math.min(100, Math.round(p * 10) / 10))
         }
 
-        await loadCollection()
+        function renderBarHTML(c: Counts, big: boolean): string {
+            const denom = c.total > 0 ? c.total : Math.max(c.aired, c.library, c.watched, 1)
+            const h = big ? 14 : 10
+            const fs = big ? 12 : 11
 
-        // ── Rendering ────────────────────────────────────────────────────────
-        function pct(part: number, total: number): string {
-            if (!total || total <= 0) return "0%"
-            return Math.min(100, Math.max(0, (part / total) * 100)) + "%"
-        }
-
-        async function buildBar(c: Counts) {
-            const wrap = await ctx.dom.createElement("div")
-            wrap.setStyle("position", "relative")
-            wrap.setStyle("width", "100%")
-            wrap.setStyle("height", "10px")
-            wrap.setStyle("margin-top", "4px")
-            wrap.setStyle("border-radius", "4px")
-            wrap.setStyle("overflow", "hidden")
-            wrap.setStyle("background", COLORS.track)
-
-            // aired fill
-            const aired = await ctx.dom.createElement("div")
-            aired.setStyle("position", "absolute")
-            aired.setStyle("left", "0")
-            aired.setStyle("top", "0")
-            aired.setStyle("bottom", "0")
-            aired.setStyle("width", pct(c.aired, c.total))
-            aired.setStyle("background", COLORS.aired)
-            wrap.append(aired)
-
-            // watched fill
-            const watched = await ctx.dom.createElement("div")
-            watched.setStyle("position", "absolute")
-            watched.setStyle("left", "0")
-            watched.setStyle("top", "0")
-            watched.setStyle("bottom", "0")
-            watched.setStyle("width", pct(c.watched, c.total))
-            watched.setStyle("background", COLORS.watched)
-            watched.setStyle("opacity", "0.85")
-            wrap.append(watched)
-
-            // library slim bar (bottom strip)
-            const library = await ctx.dom.createElement("div")
-            library.setStyle("position", "absolute")
-            library.setStyle("left", "0")
-            library.setStyle("bottom", "0")
-            library.setStyle("height", "3px")
-            library.setStyle("width", pct(c.library, c.total))
-            library.setStyle("background", COLORS.library)
-            wrap.append(library)
-
-            // segment dividers (total split into equal parts)
-            if (c.total > 0 && c.total <= 100) {
-                const seg = await ctx.dom.createElement("div")
-                seg.setStyle("position", "absolute")
-                seg.setStyle("inset", "0")
-                seg.setStyle("pointer-events", "none")
+            let segs = ""
+            if (c.total > 1 && c.total <= 100) {
                 const step = 100 / c.total
-                seg.setStyle(
-                    "background",
-                    `repeating-linear-gradient(to right, transparent 0, transparent calc(${step}% - 1px), ${COLORS.segment} calc(${step}% - 1px), ${COLORS.segment} ${step}%)`,
-                )
-                wrap.append(seg)
+                segs =
+                    `<div style="position:absolute;inset:0;pointer-events:none;` +
+                    `background:repeating-linear-gradient(to right,transparent 0,` +
+                    `transparent calc(${step}% - 1px),${COLORS.segment} calc(${step}% - 1px),` +
+                    `${COLORS.segment} ${step}%)"></div>`
             }
-            return wrap
-        }
 
-        async function buildLabel(c: Counts) {
-            const label = await ctx.dom.createElement("div")
-            label.setStyle("font-size", "11px")
-            label.setStyle("line-height", "1.3")
-            label.setStyle("opacity", "0.85")
-            label.setStyle("margin-top", "2px")
-            label.setText(
-                `${c.total} total · ${c.aired} aired · ${c.library} in library · ${c.watched} watched`,
+            return (
+                `<div style="position:relative;width:100%;height:${h}px;border-radius:4px;` +
+                `overflow:hidden;background:${COLORS.track}">` +
+                `<div style="position:absolute;left:0;top:0;bottom:0;width:${pct(c.aired, denom)}%;` +
+                `background:${COLORS.aired}"></div>` +
+                `<div style="position:absolute;left:0;top:0;bottom:0;width:${pct(c.watched, denom)}%;` +
+                `background:${COLORS.watched};opacity:.85"></div>` +
+                `<div style="position:absolute;left:0;bottom:0;height:3px;width:${pct(c.library, denom)}%;` +
+                `background:${COLORS.library}"></div>` +
+                segs +
+                `</div>` +
+                `<div style="font-size:${fs}px;line-height:1.35;opacity:.85;margin-top:3px">` +
+                `${c.total || "?"} total · ${c.aired} aired · ${c.library} in library · ${c.watched} watched` +
+                `</div>`
             )
-            return label
         }
 
-        async function injectInto(card: $ui.DOMElement) {
-            // avoid double-injection
-            const done = await card.getAttribute("data-epov")
-            if (done === "1") return
-            const idStr = await card.getAttribute("data-media-id")
-            const id = idStr ? parseInt(idStr, 10) : NaN
-            if (!id || isNaN(id)) return
-            const base = counts.get(id)
-            if (!base) return
-
-            card.setAttribute("data-epov", "1")
-            const lib = await getLibraryCount(id)
-            const c: Counts = { ...base, library: lib }
-
-            const container = await ctx.dom.createElement("div")
-            container.setStyle("width", "100%")
-            container.setStyle("padding", "2px 0")
-            container.append(await buildBar(c))
-            container.append(await buildLabel(c))
-            // appended after the title section, inside the card container
-            card.append(container)
+        async function makeBox(c: Counts, big: boolean, padding: string): Promise<$ui.DOMElement> {
+            const box = await ctx.dom.createElement("div")
+            box.setStyle("width", "100%")
+            box.setStyle("padding", padding)
+            box.setStyle("box-sizing", "border-box")
+            box.setInnerHTML(renderBarHTML(c, big))
+            return box
         }
 
-        // ── Library grid: observe cards as they render ───────────────────────
-        const [stopObserving] = ctx.dom.observe(CARD_SELECTOR, async (cards) => {
+        // ── 1. Library grid ──────────────────────────────────────────────────
+        ctx.dom.observe(CARD_SELECTOR, async (cards) => {
             for (const card of cards) {
-                await injectInto(card)
+                if (await card.getDataAttribute("epov")) continue
+                const idStr = await card.getDataAttribute("media-id")
+                const id = idStr ? parseInt(idStr, 10) : NaN
+                if (!id || isNaN(id)) continue
+                card.setDataAttribute("epov", "1") // mark before await to avoid races
+                const c = await getCounts(id)
+                if (!c) continue
+                card.append(await makeBox(c, false, "2px 4px 4px"))
             }
         })
 
-        // ── Detail page hook (priority 2): refetch when navigating to /entry ─
-        ctx.screen.onNavigate(async (e) => {
-            if (e.pathname !== "/entry") return
-            // VERIFY: pick the real container on the detail page to append into.
-            // Placeholder selector — confirm against your build.
-            // const header = await ctx.dom.queryOne(".anime-entry-header")
-            // if (header) { ... build + append a larger bar ... }
+        // ── 2. Detail page ───────────────────────────────────────────────────
+        // Inject above the episode list. Media id is read from the page wrapper's
+        // serialized media JSON (data-media), so it works regardless of route timing.
+        ctx.dom.observe(DETAIL_EPISODE_LIST_SELECTOR, async (views) => {
+            for (const view of views) {
+                if (await view.getDataAttribute("epovDetail")) continue
+                const wrapper = await ctx.dom.queryOne(DETAIL_PAGE_WRAPPER_SELECTOR)
+                if (!wrapper) continue
+                let id = 0
+                try {
+                    const mediaJson = await wrapper.getDataAttribute("media")
+                    if (mediaJson) id = JSON.parse(mediaJson).id
+                } catch (e) {
+                    $debug.error("[episode-overview-bar] could not parse detail media id", e)
+                }
+                if (!id) continue
+                view.setDataAttribute("epovDetail", "1")
+                const c = await getCounts(id)
+                if (!c) continue
+                view.before(await makeBox(c, true, "8px 0 6px"))
+            }
         })
-
-        // cleanup is automatic on unload, but keep handle available
-        void stopObserving
     })
 }
