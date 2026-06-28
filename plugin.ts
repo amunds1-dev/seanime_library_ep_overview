@@ -61,7 +61,7 @@ function init() {
             ]),
         )
 
-        diag("Episode Overview Bar v0.3.1 active")
+        diag("Episode Overview Bar v0.3.2 active")
 
         // ── Theme-aware colors (resolve against Seanime's CSS variables) ──────
         // To restyle, edit these. var(--brand) follows the user's accent color;
@@ -131,10 +131,41 @@ function init() {
             return { total, aired, library, watched, present }
         }
 
+        // Bounds a possibly-hanging promise. A single never-resolving client/data
+        // call (seen after a library change) would otherwise wedge the runner's
+        // `running` flag forever and stop all bars until a full restart.
+        function withTimeout<T>(label: string, p: Promise<T>, ms: number): Promise<T> {
+            return new Promise<T>((resolve, reject) => {
+                let settled = false
+                const cancel = ctx.setTimeout(() => {
+                    if (!settled) {
+                        settled = true
+                        reject(new Error("timeout " + label))
+                    }
+                }, ms)
+                p.then(
+                    (v) => {
+                        if (!settled) {
+                            settled = true
+                            cancel()
+                            resolve(v)
+                        }
+                    },
+                    (e) => {
+                        if (!settled) {
+                            settled = true
+                            cancel()
+                            reject(e)
+                        }
+                    },
+                )
+            })
+        }
+
         async function getCounts(mediaId: number): Promise<Counts | null> {
             if (mediaId in cache) return cache[mediaId]
             try {
-                const entry = await ctx.anime.getAnimeEntry(mediaId)
+                const entry = await withTimeout("entry:" + mediaId, ctx.anime.getAnimeEntry(mediaId), 8000)
                 const c = computeCounts(entry)
                 cache[mediaId] = c
                 return c
@@ -281,11 +312,16 @@ function init() {
                     return
                 }
                 running = true
+                // Watchdog: never let `running` stay stuck if fn somehow hangs.
+                const release = ctx.setTimeout(() => {
+                    running = false
+                }, 20000)
                 try {
                     await fn()
                 } catch (e) {
                     $debug.error("[episode-overview-bar] runner " + key, e)
                 } finally {
+                    release()
                     running = false
                     if (rerun) {
                         rerun = false
@@ -319,7 +355,7 @@ function init() {
         const scheduleGrid = makeRunner("grid", async () => {
             let cards: $ui.DOMElement[] = []
             try {
-                cards = await ctx.dom.query(CARD_SELECTOR)
+                cards = await withTimeout("grid-query", ctx.dom.query(CARD_SELECTOR), 8000)
             } catch (e) {
                 $debug.error("[episode-overview-bar] grid query failed", e)
                 return
@@ -341,9 +377,9 @@ function init() {
         // Uses a distinct marker (data-epov-detail-bar) so it isn't confused with
         // the recommendation cards' bars that also live inside the page wrapper.
         const scheduleDetail = makeRunner("detail", async () => {
-            const view = await ctx.dom.queryOne(DETAIL_EPISODE_LIST_SELECTOR)
+            const view = await withTimeout("detail-view", ctx.dom.queryOne(DETAIL_EPISODE_LIST_SELECTOR), 8000)
             if (!view) return
-            const wrapper = await ctx.dom.queryOne(DETAIL_PAGE_WRAPPER_SELECTOR)
+            const wrapper = await withTimeout("detail-wrapper", ctx.dom.queryOne(DETAIL_PAGE_WRAPPER_SELECTOR), 8000)
             if (!wrapper) return
             if (await wrapper.queryOne("[data-epov-detail-bar]")) return // already
             let id = 0
