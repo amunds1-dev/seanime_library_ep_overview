@@ -51,6 +51,10 @@ function init() {
         // NOTE: counts are cached for the session; reload to refresh after watching.
         const cache: Record<number, Counts | null> = {}
 
+        // TEMP diagnostics (remove once the card bar is confirmed working).
+        ctx.toast.info("Episode Overview Bar v0.1.2 active")
+        let firstGridToast = true
+
         function computeCounts(entry: $app.Anime_Entry): Counts {
             const media = entry.media
             const total = media?.episodes ?? 0
@@ -168,6 +172,10 @@ function init() {
                 }
             }
             $debug.log("[episode-overview-bar] grid injected=" + injected)
+            if (firstGridToast) {
+                firstGridToast = false
+                ctx.toast.info("EpOverview grid: matched " + cards.length + " cards, injected " + injected)
+            }
         })
 
         // ── 2. Detail page ───────────────────────────────────────────────────
