@@ -52,8 +52,7 @@ function init() {
         const cache: Record<number, Counts | null> = {}
 
         // TEMP diagnostics (remove once the card bar is confirmed working).
-        ctx.toast.info("Episode Overview Bar v0.1.2 active")
-        let firstGridToast = true
+        ctx.toast.info("Episode Overview Bar v0.1.3 active")
 
         function computeCounts(entry: $app.Anime_Entry): Counts {
             const media = entry.media
@@ -144,39 +143,78 @@ function init() {
         }
 
         // ── 1. Library grid ──────────────────────────────────────────────────
-        ctx.dom.observe(CARD_SELECTOR, async (cards) => {
-            $debug.log("[episode-overview-bar] grid observe fired; cards=" + cards.length)
+        // Injected boxes carry data-epov-bar="1" so they're findable in DevTools
+        // Elements (Ctrl+F "epov-bar").
+        async function injectCard(card: $ui.DOMElement): Promise<boolean> {
+            if (await card.getDataAttribute("epov")) return false
+            const type = await card.getDataAttribute("media-type")
+            if (type && type !== "anime") {
+                card.setDataAttribute("epov", "skip") // manga etc.
+                return false
+            }
+            const idStr = await card.getDataAttribute("media-id")
+            const id = idStr ? parseInt(idStr, 10) : NaN
+            if (!id || isNaN(id)) return false
+            card.setDataAttribute("epov", "1") // mark before await to avoid races
+            const c = await getCounts(id)
+            if (!c) return false
+            const box = await makeBox(c, false, "4px 2px 2px")
+            box.setDataAttribute("epov-bar", "1")
+            // Prefer the title section so the bar flows below the cover + title.
+            const title = await card.queryOne(CARD_TITLE_SELECTOR)
+            if (title) title.append(box)
+            else card.append(box)
+            return true
+        }
+
+        let lastGridReport = ""
+        async function reportGrid(source: string, matched: number, injected: number) {
+            const report = source + ": matched " + matched + " injected " + injected
+            $debug.log("[episode-overview-bar] grid " + report)
+            if (report !== lastGridReport) {
+                lastGridReport = report
+                ctx.toast.info("EpOverview grid " + report)
+            }
+        }
+
+        async function sweepGrid(source: string) {
+            let cards: $ui.DOMElement[] = []
+            try {
+                cards = await ctx.dom.query(CARD_SELECTOR)
+            } catch (e) {
+                $debug.error("[episode-overview-bar] grid query failed", e)
+                return
+            }
             let injected = 0
             for (const card of cards) {
                 try {
-                    if (await card.getDataAttribute("epov")) continue
-                    const type = await card.getDataAttribute("media-type")
-                    if (type && type !== "anime") {
-                        card.setDataAttribute("epov", "skip") // manga etc.
-                        continue
-                    }
-                    const idStr = await card.getDataAttribute("media-id")
-                    const id = idStr ? parseInt(idStr, 10) : NaN
-                    if (!id || isNaN(id)) continue
-                    card.setDataAttribute("epov", "1") // mark before await to avoid races
-                    const c = await getCounts(id)
-                    if (!c) continue
-                    const box = await makeBox(c, false, "4px 2px 2px")
-                    // Prefer the title section so the bar flows below the cover + title.
-                    const title = await card.queryOne(CARD_TITLE_SELECTOR)
-                    if (title) title.append(box)
-                    else card.append(box)
-                    injected++
+                    if (await injectCard(card)) injected++
                 } catch (e) {
                     $debug.error("[episode-overview-bar] grid inject error", e)
                 }
             }
-            $debug.log("[episode-overview-bar] grid injected=" + injected)
-            if (firstGridToast) {
-                firstGridToast = false
-                ctx.toast.info("EpOverview grid: matched " + cards.length + " cards, injected " + injected)
+            await reportGrid(source, cards.length, injected)
+        }
+
+        // observe handles cards added later (scrolling a carousel, route changes)
+        ctx.dom.observe(CARD_SELECTOR, async (cards) => {
+            let injected = 0
+            for (const card of cards) {
+                try {
+                    if (await injectCard(card)) injected++
+                } catch (e) {
+                    $debug.error("[episode-overview-bar] grid inject error", e)
+                }
             }
+            await reportGrid("observe", cards.length, injected)
         })
+
+        // Active sweeps cover cards already present when a route mounts, which
+        // observe may not re-report on client-side navigation.
+        ctx.screen.onNavigate(() => {
+            void sweepGrid("nav")
+        })
+        void sweepGrid("startup")
 
         // ── 2. Detail page ───────────────────────────────────────────────────
         // Inject above the episode list. Media id is read from the page wrapper's
