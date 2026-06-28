@@ -28,6 +28,10 @@ type Counts = {
     aired: number
     library: number
     watched: number
+    // Per-episode downloaded presence (present[n-1] = episode n in library).
+    // Undefined when unavailable (e.g. some Nakama peers) — then we draw the
+    // contiguous library strip from `library` instead.
+    present?: boolean[]
 }
 
 function init() {
@@ -57,7 +61,7 @@ function init() {
             ]),
         )
 
-        diag("Episode Overview Bar v0.2.3 active")
+        diag("Episode Overview Bar v0.3.0 active")
 
         // ── Theme-aware colors (resolve against Seanime's CSS variables) ──────
         // To restyle, edit these. var(--brand) follows the user's accent color;
@@ -100,7 +104,31 @@ function init() {
                 library = Math.max(library, nakama)
             }
 
-            return { total, aired, library, watched }
+            // Per-episode presence for gap visualization. entry.episodes holds only
+            // downloaded main episodes; episodes not in it become gaps. Capped at
+            // 300 (beyond that, per-episode cells aren't meaningfully visible).
+            let present: boolean[] | undefined
+            const eps = entry.episodes
+            if (eps && eps.length) {
+                let maxEp = total
+                const nums: number[] = []
+                for (const ep of eps) {
+                    if (ep.type && ep.type !== "main") continue
+                    const num = ep.episodeNumber
+                    if (typeof num === "number" && num >= 1) {
+                        nums.push(num)
+                        if (num > maxEp) maxEp = num
+                    }
+                }
+                const len = total > 0 ? total : maxEp
+                if (nums.length && len > 0 && len <= 300) {
+                    present = []
+                    for (let i = 0; i < len; i++) present.push(false)
+                    for (const num of nums) if (num >= 1 && num <= len) present[num - 1] = true
+                }
+            }
+
+            return { total, aired, library, watched, present }
         }
 
         async function getCounts(mediaId: number): Promise<Counts | null> {
@@ -124,10 +152,36 @@ function init() {
             return Math.max(0, Math.min(100, Math.round(p * 10) / 10))
         }
 
+        // Library layer as per-episode cells: a left-to-right gradient with hard
+        // stops, colored only where the episode is downloaded so gaps show through.
+        function libGradient(present: boolean[], color: string): string {
+            const n = present.length
+            const stops: string[] = []
+            for (let i = 0; i < n; i++) {
+                const a = ((i / n) * 100).toFixed(3)
+                const b = (((i + 1) / n) * 100).toFixed(3)
+                const col = present[i] ? color : "transparent"
+                stops.push(col + " " + a + "%", col + " " + b + "%")
+            }
+            return "linear-gradient(to right," + stops.join(",") + ")"
+        }
+
         function renderBarHTML(c: Counts, big: boolean): string {
-            const denom = c.total > 0 ? c.total : Math.max(c.aired, c.library, c.watched, 1)
+            const denom =
+                c.total > 0
+                    ? c.total
+                    : Math.max(c.aired, c.library, c.watched, c.present ? c.present.length : 0, 1)
             const h = big ? 14 : 10
             const fs = big ? 12 : 11
+
+            // In-library layer: per-episode gaps when we have presence data, else a
+            // contiguous strip sized by the count.
+            const libLayer =
+                c.present && c.present.length
+                    ? `<div style="position:absolute;left:0;bottom:0;height:3px;width:100%;` +
+                      `background:${libGradient(c.present, COLORS.library)}"></div>`
+                    : `<div style="position:absolute;left:0;bottom:0;height:3px;width:${pct(c.library, denom)}%;` +
+                      `background:${COLORS.library}"></div>`
 
             let segs = ""
             if (c.total > 1 && c.total <= 100) {
@@ -146,8 +200,7 @@ function init() {
                 `background:${COLORS.aired}"></div>` +
                 `<div style="position:absolute;left:0;top:0;bottom:0;width:${pct(c.watched, denom)}%;` +
                 `background:${COLORS.watched};opacity:.9"></div>` +
-                `<div style="position:absolute;left:0;bottom:0;height:3px;width:${pct(c.library, denom)}%;` +
-                `background:${COLORS.library}"></div>` +
+                libLayer +
                 segs +
                 `</div>` +
                 `<div style="font-size:${fs}px;line-height:1.35;opacity:.85;margin-top:3px">` +
