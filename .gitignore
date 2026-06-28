@@ -1,0 +1,12 @@
+# Local dev / secrets — never commit
+*.pat.txt
+.gh-*.txt
+.env
+.env.*
+
+# Editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
