@@ -44,9 +44,9 @@ function init() {
         }
 
         // Tray icon = the plugin's settings surface (holds the toggle).
-        // Icon is a data URI (raw GitHub serves .svg as text/plain, which <img> won't render).
-        const ICON =
-            "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSI+PGxpbmUgeDE9IjQiIHkxPSIyMCIgeDI9IjIwIiB5Mj0iMjAiIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48cmVjdCB4PSI1IiB5PSIxMiIgd2lkdGg9IjMuNSIgaGVpZ2h0PSI2IiByeD0iMSIgZmlsbD0iI2ZmZmZmZiIvPjxyZWN0IHg9IjEwLjI1IiB5PSI4IiB3aWR0aD0iMy41IiBoZWlnaHQ9IjEwIiByeD0iMSIgZmlsbD0iI2ZmZmZmZiIvPjxyZWN0IHg9IjE1LjUiIHk9IjQiIHdpZHRoPSIzLjUiIGhlaWdodD0iMTQiIHJ4PSIxIiBmaWxsPSIjZmZmZmZmIi8+PC9zdmc+"
+        // Must be a raster URL ending in .png/.jpg/etc — Seanime's image component
+        // (isExternal) rejects .svg and data: URIs and shows a fallback instead.
+        const ICON = "https://raw.githubusercontent.com/amunds1-dev/seanime_library_ep_overview/main/icon.png"
         const diagRef = settings.fieldRef("diagnostics")
         const tray = ctx.newTray({ iconUrl: ICON, withContent: true, width: "320px" })
         tray.render(() =>
@@ -57,7 +57,7 @@ function init() {
             ]),
         )
 
-        diag("Episode Overview Bar v0.2.1 active")
+        diag("Episode Overview Bar v0.2.2 active")
 
         // ── Theme-aware colors (resolve against Seanime's CSS variables) ──────
         // To restyle, edit these. var(--brand) follows the user's accent color;
@@ -66,7 +66,7 @@ function init() {
             track: "rgb(var(--color-gray-500) / 0.22)", // total backdrop
             aired: "rgb(var(--color-gray-200) / 0.32)", // aired fill
             watched: "rgb(var(--color-brand-300))", // watched — light purple (accent)
-            library: "rgb(var(--color-brand-700))", // in-library — darker purple (accent)
+            library: "rgb(var(--color-brand-500))", // in-library — medium purple (accent)
             segment: "rgb(var(--color-gray-950) / 0.40)", // segment dividers
         }
 
