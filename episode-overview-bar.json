@@ -2,7 +2,7 @@
   "id": "episode-overview-bar",
   "name": "Episode Overview Bar",
   "version": "0.1.0",
-  "manifestURI": "",
+  "manifestURI": "https://raw.githubusercontent.com/amunds1-dev/seanime_library_ep_overview/main/episode-overview-bar.json",
   "language": "typescript",
   "type": "plugin",
   "description": "Adds a 3-layer progress bar (total / aired / in-library / watched) with exact counts to anime library cards and the anime detail page.",
