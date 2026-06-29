@@ -32,19 +32,23 @@ type Counts = {
     // Undefined when unavailable (e.g. some Nakama peers) — then we draw the
     // contiguous library strip from `library` instead.
     present?: boolean[]
+    presentSource?: string // diagnostics: which data source produced `present`
 }
 
 function init() {
     $ui.register((ctx) => {
         // ── Settings + diagnostics toggle ────────────────────────────────────
         const settings = ctx.settings.define("config", { diagnostics: false })
+        function isDiag(): boolean {
+            try {
+                return !!settings.get("diagnostics")
+            } catch (e) {
+                return false
+            }
+        }
         function diag(msg: string) {
             $debug.log("[episode-overview-bar] " + msg)
-            try {
-                if (settings.get("diagnostics")) ctx.toast.info(msg)
-            } catch (e) {
-                /* ignore */
-            }
+            if (isDiag()) ctx.toast.info(msg)
         }
 
         // Tray icon = the plugin's settings surface (holds the toggle).
@@ -61,7 +65,7 @@ function init() {
             ]),
         )
 
-        diag("Episode Overview Bar v0.3.3 active")
+        diag("Episode Overview Bar v0.3.4 active")
 
         // ── Theme-aware colors (resolve against Seanime's CSS variables) ──────
         // To restyle, edit these. var(--brand) follows the user's accent color;
@@ -107,28 +111,69 @@ function init() {
             return { total, aired, library, watched }
         }
 
-        // Per-episode presence for gap visualization, from the episode collection.
-        // (getAnimeEntry does NOT hydrate entry.episodes in the plugin context, so
-        // we read isDownloaded per episode here instead.) Capped at 300 episodes.
-        function buildPresent(ec: $app.Anime_EpisodeCollection, total: number): boolean[] | undefined {
-            const eps = ec && ec.episodes
-            if (!eps || !eps.length) return undefined
-            let maxEp = total
-            const downloaded: number[] = []
-            for (const ep of eps) {
-                if (ep.type && ep.type !== "main") continue
-                const num = ep.episodeNumber
-                if (typeof num === "number" && num >= 1) {
-                    if (num > maxEp) maxEp = num
-                    if (ep.isDownloaded) downloaded.push(num)
+        // Per-episode presence for gap visualization. The plugin sandbox doesn't
+        // reliably hydrate every source, so try them in order and use the first
+        // that yields downloaded main-episode numbers:
+        //   1. entry.localFiles  (library source of truth)
+        //   2. entry.episodes    (downloaded mains, isDownloaded)
+        //   3. episode collection (isDownloaded per episode)
+        function derivePresent(
+            entry: $app.Anime_Entry,
+            ec: $app.Anime_EpisodeCollection | undefined,
+            total: number,
+        ): { present?: boolean[]; source: string } {
+            let nums: number[] = []
+            let source = "none"
+
+            const lfs = entry.localFiles
+            if (lfs && lfs.length) {
+                const tmp: number[] = []
+                for (const lf of lfs) {
+                    const md = lf.metadata
+                    if (!md || (md.type && md.type !== "main")) continue
+                    if (typeof md.episode === "number" && md.episode >= 1) tmp.push(md.episode)
+                }
+                if (tmp.length) {
+                    nums = tmp
+                    source = "lf"
                 }
             }
+
+            if (!nums.length && entry.episodes && entry.episodes.length) {
+                const tmp: number[] = []
+                for (const ep of entry.episodes) {
+                    if (ep.type && ep.type !== "main") continue
+                    if (ep.isDownloaded && typeof ep.episodeNumber === "number" && ep.episodeNumber >= 1)
+                        tmp.push(ep.episodeNumber)
+                }
+                if (tmp.length) {
+                    nums = tmp
+                    source = "ep"
+                }
+            }
+
+            if (!nums.length && ec && ec.episodes && ec.episodes.length) {
+                const tmp: number[] = []
+                for (const ep of ec.episodes) {
+                    if (ep.type && ep.type !== "main") continue
+                    if (ep.isDownloaded && typeof ep.episodeNumber === "number" && ep.episodeNumber >= 1)
+                        tmp.push(ep.episodeNumber)
+                }
+                if (tmp.length) {
+                    nums = tmp
+                    source = "ec"
+                }
+            }
+
+            if (!nums.length) return { source }
+            let maxEp = total
+            for (const n of nums) if (n > maxEp) maxEp = n
             const len = total > 0 ? total : maxEp
-            if (!downloaded.length || len <= 0 || len > 300) return undefined
+            if (len <= 0 || len > 300) return { source }
             const present: boolean[] = []
             for (let i = 0; i < len; i++) present.push(false)
-            for (const num of downloaded) if (num >= 1 && num <= len) present[num - 1] = true
-            return present
+            for (const n of nums) if (n >= 1 && n <= len) present[n - 1] = true
+            return { present, source }
         }
 
         // Bounds a possibly-hanging promise. A single never-resolving client/data
@@ -167,13 +212,15 @@ function init() {
             try {
                 const entry = await withTimeout("entry:" + mediaId, ctx.anime.getAnimeEntry(mediaId), 8000)
                 const c = computeCounts(entry)
-                // Per-episode presence needs a separate call (entry.episodes is empty here).
+                let ec: $app.Anime_EpisodeCollection | undefined
                 try {
-                    const ec = await withTimeout("ec:" + mediaId, ctx.anime.getEpisodeCollection(mediaId), 8000)
-                    c.present = buildPresent(ec, c.total)
+                    ec = await withTimeout("ec:" + mediaId, ctx.anime.getEpisodeCollection(mediaId), 8000)
                 } catch (e) {
                     $debug.error("[episode-overview-bar] getEpisodeCollection failed", mediaId, e)
                 }
+                const dp = derivePresent(entry, ec, c.total)
+                c.present = dp.present
+                c.presentSource = dp.source
                 cache[mediaId] = c
                 return c
             } catch (e) {
@@ -243,6 +290,7 @@ function init() {
                 `</div>` +
                 `<div style="font-size:${fs}px;line-height:1.35;opacity:.85;margin-top:3px">` +
                 `${c.total || "?"} total · ${c.aired} aired · ${c.library} in library · ${c.watched} watched` +
+                (isDiag() ? " · src:" + (c.presentSource || "?") : "") +
                 `</div>`
             )
         }
