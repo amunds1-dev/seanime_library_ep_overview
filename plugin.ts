@@ -61,7 +61,7 @@ function init() {
             ]),
         )
 
-        diag("Episode Overview Bar v0.3.2 active")
+        diag("Episode Overview Bar v0.3.3 active")
 
         // ── Theme-aware colors (resolve against Seanime's CSS variables) ──────
         // To restyle, edit these. var(--brand) follows the user's accent color;
@@ -104,31 +104,31 @@ function init() {
                 library = Math.max(library, nakama)
             }
 
-            // Per-episode presence for gap visualization. entry.episodes holds only
-            // downloaded main episodes; episodes not in it become gaps. Capped at
-            // 300 (beyond that, per-episode cells aren't meaningfully visible).
-            let present: boolean[] | undefined
-            const eps = entry.episodes
-            if (eps && eps.length) {
-                let maxEp = total
-                const nums: number[] = []
-                for (const ep of eps) {
-                    if (ep.type && ep.type !== "main") continue
-                    const num = ep.episodeNumber
-                    if (typeof num === "number" && num >= 1) {
-                        nums.push(num)
-                        if (num > maxEp) maxEp = num
-                    }
-                }
-                const len = total > 0 ? total : maxEp
-                if (nums.length && len > 0 && len <= 300) {
-                    present = []
-                    for (let i = 0; i < len; i++) present.push(false)
-                    for (const num of nums) if (num >= 1 && num <= len) present[num - 1] = true
+            return { total, aired, library, watched }
+        }
+
+        // Per-episode presence for gap visualization, from the episode collection.
+        // (getAnimeEntry does NOT hydrate entry.episodes in the plugin context, so
+        // we read isDownloaded per episode here instead.) Capped at 300 episodes.
+        function buildPresent(ec: $app.Anime_EpisodeCollection, total: number): boolean[] | undefined {
+            const eps = ec && ec.episodes
+            if (!eps || !eps.length) return undefined
+            let maxEp = total
+            const downloaded: number[] = []
+            for (const ep of eps) {
+                if (ep.type && ep.type !== "main") continue
+                const num = ep.episodeNumber
+                if (typeof num === "number" && num >= 1) {
+                    if (num > maxEp) maxEp = num
+                    if (ep.isDownloaded) downloaded.push(num)
                 }
             }
-
-            return { total, aired, library, watched, present }
+            const len = total > 0 ? total : maxEp
+            if (!downloaded.length || len <= 0 || len > 300) return undefined
+            const present: boolean[] = []
+            for (let i = 0; i < len; i++) present.push(false)
+            for (const num of downloaded) if (num >= 1 && num <= len) present[num - 1] = true
+            return present
         }
 
         // Bounds a possibly-hanging promise. A single never-resolving client/data
@@ -167,6 +167,13 @@ function init() {
             try {
                 const entry = await withTimeout("entry:" + mediaId, ctx.anime.getAnimeEntry(mediaId), 8000)
                 const c = computeCounts(entry)
+                // Per-episode presence needs a separate call (entry.episodes is empty here).
+                try {
+                    const ec = await withTimeout("ec:" + mediaId, ctx.anime.getEpisodeCollection(mediaId), 8000)
+                    c.present = buildPresent(ec, c.total)
+                } catch (e) {
+                    $debug.error("[episode-overview-bar] getEpisodeCollection failed", mediaId, e)
+                }
                 cache[mediaId] = c
                 return c
             } catch (e) {
