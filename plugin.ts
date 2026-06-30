@@ -65,7 +65,7 @@ function init() {
             ]),
         )
 
-        diag("Episode Overview Bar v0.3.4 active")
+        diag("Episode Overview Bar v0.3.5 active")
 
         // ── Theme-aware colors (resolve against Seanime's CSS variables) ──────
         // To restyle, edit these. var(--brand) follows the user's accent color;
@@ -111,69 +111,58 @@ function init() {
             return { total, aired, library, watched }
         }
 
-        // Per-episode presence for gap visualization. The plugin sandbox doesn't
-        // reliably hydrate every source, so try them in order and use the first
-        // that yields downloaded main-episode numbers:
-        //   1. entry.localFiles  (library source of truth)
-        //   2. entry.episodes    (downloaded mains, isDownloaded)
-        //   3. episode collection (isDownloaded per episode)
-        function derivePresent(
-            entry: $app.Anime_Entry,
-            ec: $app.Anime_EpisodeCollection | undefined,
-            total: number,
-        ): { present?: boolean[]; source: string } {
-            let nums: number[] = []
-            let source = "none"
-
-            const lfs = entry.localFiles
-            if (lfs && lfs.length) {
-                const tmp: number[] = []
-                for (const lf of lfs) {
-                    const md = lf.metadata
-                    if (!md || (md.type && md.type !== "main")) continue
-                    if (typeof md.episode === "number" && md.episode >= 1) tmp.push(md.episode)
-                }
-                if (tmp.length) {
-                    nums = tmp
-                    source = "lf"
-                }
-            }
-
-            if (!nums.length && entry.episodes && entry.episodes.length) {
-                const tmp: number[] = []
-                for (const ep of entry.episodes) {
-                    if (ep.type && ep.type !== "main") continue
-                    if (ep.isDownloaded && typeof ep.episodeNumber === "number" && ep.episodeNumber >= 1)
-                        tmp.push(ep.episodeNumber)
-                }
-                if (tmp.length) {
-                    nums = tmp
-                    source = "ep"
-                }
-            }
-
-            if (!nums.length && ec && ec.episodes && ec.episodes.length) {
-                const tmp: number[] = []
-                for (const ep of ec.episodes) {
-                    if (ep.type && ep.type !== "main") continue
-                    if (ep.isDownloaded && typeof ep.episodeNumber === "number" && ep.episodeNumber >= 1)
-                        tmp.push(ep.episodeNumber)
-                }
-                if (tmp.length) {
-                    nums = tmp
-                    source = "ec"
-                }
-            }
-
-            if (!nums.length) return { source }
+        // ── Per-episode presence (for gap visualization) ─────────────────────
+        // The plugin sandbox under-hydrates several sources, so we try many and
+        // use the first that yields data. `src:` in the label shows which won.
+        function numsToPresent(nums: number[], total: number): boolean[] | undefined {
+            if (!nums.length) return undefined
             let maxEp = total
             for (const n of nums) if (n > maxEp) maxEp = n
             const len = total > 0 ? total : maxEp
-            if (len <= 0 || len > 300) return { source }
+            if (len <= 0 || len > 300) return undefined
             const present: boolean[] = []
             for (let i = 0; i < len; i++) present.push(false)
             for (const n of nums) if (n >= 1 && n <= len) present[n - 1] = true
-            return { present, source }
+            return present
+        }
+
+        function lfNums(entry: $app.Anime_Entry): number[] {
+            const out: number[] = []
+            for (const lf of entry.localFiles ?? []) {
+                const md = lf.metadata
+                if (md && (!md.type || md.type === "main") && typeof md.episode === "number" && md.episode >= 1)
+                    out.push(md.episode)
+            }
+            return out
+        }
+
+        function downloadedEpisodeNums(eps: Array<$app.Anime_Episode> | undefined): number[] {
+            const out: number[] = []
+            for (const ep of eps ?? []) {
+                if (ep.type && ep.type !== "main") continue
+                if (ep.isDownloaded && typeof ep.episodeNumber === "number" && ep.episodeNumber >= 1)
+                    out.push(ep.episodeNumber)
+            }
+            return out
+        }
+
+        // Derive presence from the "episodes to download" (missing) list: an aired
+        // episode is present iff it isn't in the missing set.
+        function presentFromMissing(
+            di: $app.Anime_EntryDownloadInfo | undefined,
+            total: number,
+            aired: number,
+        ): boolean[] | undefined {
+            if (!di || !di.episodesToDownload || total <= 0 || total > 300) return undefined
+            const missing: Record<number, boolean> = {}
+            for (const e of di.episodesToDownload) if (typeof e.episodeNumber === "number") missing[e.episodeNumber] = true
+            const a = aired > 0 ? aired : total
+            const present: boolean[] = []
+            for (let i = 0; i < total; i++) {
+                const n = i + 1
+                present.push(n <= a && !missing[n])
+            }
+            return present
         }
 
         // Bounds a possibly-hanging promise. A single never-resolving client/data
@@ -212,15 +201,39 @@ function init() {
             try {
                 const entry = await withTimeout("entry:" + mediaId, ctx.anime.getAnimeEntry(mediaId), 8000)
                 const c = computeCounts(entry)
-                let ec: $app.Anime_EpisodeCollection | undefined
-                try {
-                    ec = await withTimeout("ec:" + mediaId, ctx.anime.getEpisodeCollection(mediaId), 8000)
-                } catch (e) {
-                    $debug.error("[episode-overview-bar] getEpisodeCollection failed", mediaId, e)
+
+                // Cheap, no-extra-call sources first.
+                let present = numsToPresent(lfNums(entry), c.total)
+                let source = present ? "lf" : "none"
+                if (!present) {
+                    present = numsToPresent(downloadedEpisodeNums(entry.episodes), c.total)
+                    if (present) source = "ep"
                 }
-                const dp = derivePresent(entry, ec, c.total)
-                c.present = dp.present
-                c.presentSource = dp.source
+                if (!present) {
+                    present = presentFromMissing(entry.downloadInfo, c.total, c.aired)
+                    if (present) source = "di"
+                }
+                // Dedicated calls only if the entry didn't carry the data.
+                if (!present) {
+                    try {
+                        const ec = await withTimeout("ec:" + mediaId, ctx.anime.getEpisodeCollection(mediaId), 8000)
+                        present = numsToPresent(downloadedEpisodeNums(ec?.episodes), c.total)
+                        if (present) source = "ec"
+                    } catch (e) {
+                        $debug.error("[episode-overview-bar] getEpisodeCollection failed", mediaId, e)
+                    }
+                }
+                if (!present) {
+                    try {
+                        const di = await withTimeout("di:" + mediaId, ctx.anime.getEntryDownloadInfo(mediaId), 8000)
+                        present = presentFromMissing(di, c.total, c.aired)
+                        if (present) source = "di2"
+                    } catch (e) {
+                        $debug.error("[episode-overview-bar] getEntryDownloadInfo failed", mediaId, e)
+                    }
+                }
+                c.present = present
+                c.presentSource = source
                 cache[mediaId] = c
                 return c
             } catch (e) {
@@ -290,7 +303,8 @@ function init() {
                 `</div>` +
                 `<div style="font-size:${fs}px;line-height:1.35;opacity:.85;margin-top:3px">` +
                 `${c.total || "?"} total · ${c.aired} aired · ${c.library} in library · ${c.watched} watched` +
-                (isDiag() ? " · src:" + (c.presentSource || "?") : "") +
+                // TEMP (unconditional): shows which data source produced the gaps.
+                " · src:" + (c.presentSource || "?") +
                 `</div>`
             )
         }
