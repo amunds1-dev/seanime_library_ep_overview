@@ -69,11 +69,14 @@ variables, so they follow the app theme automatically:
 ## In-library gaps
 
 The slim bottom strip is drawn **per episode**, so missing episodes between present ones
-show as gaps. The downloaded set is derived (in order) from `entry.localFiles`,
-`entry.episodes`, `entry.downloadInfo`, then the `getEpisodeCollection` /
-`getEntryDownloadInfo` calls — whichever the plugin sandbox hydrates (in practice
-`entry.downloadInfo`, the "episodes to download" list). Shows over 300 episodes fall back
-to the contiguous count strip.
+show as gaps. The downloaded set is derived (first source with data wins) from
+`entry.localFiles`, `entry.episodes`, `entry.downloadInfo`, then a `getEntryDownloadInfo`
+call — whichever the plugin sandbox hydrates (in practice `entry.downloadInfo`, the
+"episodes to download" list). Shows over 300 episodes fall back to the contiguous strip.
+
+On the **detail page** the bar also lists missing episodes (`Missing: 16–19, 22–24`) on
+the counts line, and each segment has a hover tooltip (`Ep N — watched / in library /
+missing / not aired`).
 
 ## Diagnostics toggle
 

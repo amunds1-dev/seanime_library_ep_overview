@@ -32,7 +32,6 @@ type Counts = {
     // Undefined when unavailable (e.g. some Nakama peers) — then we draw the
     // contiguous library strip from `library` instead.
     present?: boolean[]
-    presentSource?: string // diagnostics: which data source produced `present`
 }
 
 function init() {
@@ -63,7 +62,7 @@ function init() {
             ]),
         )
 
-        diag("Episode Overview Bar v0.4.3 active")
+        diag("Episode Overview Bar v1.0.0 active")
 
         // ── Theme-aware colors (resolve against Seanime's CSS variables) ──────
         // To restyle, edit these. var(--brand) follows the user's accent color;
@@ -200,38 +199,21 @@ function init() {
                 const entry = await withTimeout("entry:" + mediaId, ctx.anime.getAnimeEntry(mediaId), 8000)
                 const c = computeCounts(entry)
 
-                // Cheap, no-extra-call sources first.
+                // Per-episode presence for gaps — first source with data wins.
+                // In practice entry.downloadInfo carries it (no extra call); the
+                // getEntryDownloadInfo call is a fallback if the entry didn't.
                 let present = numsToPresent(lfNums(entry), c.total)
-                let source = present ? "lf" : "none"
-                if (!present) {
-                    present = numsToPresent(downloadedEpisodeNums(entry.episodes), c.total)
-                    if (present) source = "ep"
-                }
-                if (!present) {
-                    present = presentFromMissing(entry.downloadInfo, c.total, c.aired)
-                    if (present) source = "di"
-                }
-                // Dedicated calls only if the entry didn't carry the data.
-                if (!present) {
-                    try {
-                        const ec = await withTimeout("ec:" + mediaId, ctx.anime.getEpisodeCollection(mediaId), 8000)
-                        present = numsToPresent(downloadedEpisodeNums(ec?.episodes), c.total)
-                        if (present) source = "ec"
-                    } catch (e) {
-                        $debug.error("[episode-overview-bar] getEpisodeCollection failed", mediaId, e)
-                    }
-                }
+                if (!present) present = numsToPresent(downloadedEpisodeNums(entry.episodes), c.total)
+                if (!present) present = presentFromMissing(entry.downloadInfo, c.total, c.aired)
                 if (!present) {
                     try {
                         const di = await withTimeout("di:" + mediaId, ctx.anime.getEntryDownloadInfo(mediaId), 8000)
                         present = presentFromMissing(di, c.total, c.aired)
-                        if (present) source = "di2"
                     } catch (e) {
                         $debug.error("[episode-overview-bar] getEntryDownloadInfo failed", mediaId, e)
                     }
                 }
                 c.present = present
-                c.presentSource = source
                 cache[mediaId] = c
                 return c
             } catch (e) {
