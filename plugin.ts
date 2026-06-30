@@ -38,13 +38,12 @@ type Counts = {
 function init() {
     $ui.register((ctx) => {
         // ── Settings + diagnostics toggle ────────────────────────────────────
-        const settings = ctx.settings.define("config", { diagnostics: false })
+        // Diagnostics toggle (off by default), exposed via the tray switch below.
+        // Tray switches bind to a ctx.fieldRef (not settings.fieldRef), which is
+        // why the earlier settings-backed toggle did nothing.
+        const diagRef = ctx.fieldRef<boolean>(false)
         function isDiag(): boolean {
-            try {
-                return !!settings.get("diagnostics")
-            } catch (e) {
-                return false
-            }
+            return !!diagRef.current
         }
         function diag(msg: string) {
             $debug.log("[episode-overview-bar] " + msg)
@@ -55,17 +54,16 @@ function init() {
         // Must be a raster URL ending in .png/.jpg/etc — Seanime's image component
         // (isExternal) rejects .svg and data: URIs and shows a fallback instead.
         const ICON = "https://raw.githubusercontent.com/amunds1-dev/seanime_library_ep_overview/main/icon.png"
-        const diagRef = settings.fieldRef("diagnostics")
         const tray = ctx.newTray({ iconUrl: ICON, withContent: true, width: "320px" })
         tray.render(() =>
             tray.stack([
                 tray.text("Episode Overview Bar"),
-                tray.text("Diagnostic toasts report matched/injected card counts. Leave off for normal use."),
+                tray.text("Diagnostic toasts report matched/injected card counts. Off by default."),
                 tray.switch("Show diagnostic toasts", { fieldRef: diagRef }),
             ]),
         )
 
-        diag("Episode Overview Bar v0.3.5 active")
+        diag("Episode Overview Bar v0.4.0 active")
 
         // ── Theme-aware colors (resolve against Seanime's CSS variables) ──────
         // To restyle, edit these. var(--brand) follows the user's accent color;
@@ -303,8 +301,6 @@ function init() {
                 `</div>` +
                 `<div style="font-size:${fs}px;line-height:1.35;opacity:.85;margin-top:3px">` +
                 `${c.total || "?"} total · ${c.aired} aired · ${c.library} in library · ${c.watched} watched` +
-                // TEMP (unconditional): shows which data source produced the gaps.
-                " · src:" + (c.presentSource || "?") +
                 `</div>`
             )
         }

@@ -62,10 +62,18 @@ npx -y -p typescript@5.4 tsc --noEmit --target ES2018 --lib ES2018 --skipLibChec
 Colors live in the `COLORS` object near the top of `plugin.ts` and use Seanime's CSS
 variables, so they follow the app theme automatically:
 
-- `watched` = `var(--brand)` — follows your accent color in Seanime settings
+- `watched` = `rgb(var(--color-brand-300))` — light accent (follows your theme)
+- `library` = `rgb(var(--color-brand-300))` — accent, drawn as the slim per-episode strip
 - `track` / `aired` = `rgb(var(--color-gray-*) / a)` — adapt to light/dark
-- `library` = a fixed green (semantic "in your library"); change to `var(--brand)` shades
-  if you want it to track the accent too
+
+## In-library gaps
+
+The slim bottom strip is drawn **per episode**, so missing episodes between present ones
+show as gaps. The downloaded set is derived (in order) from `entry.localFiles`,
+`entry.episodes`, `entry.downloadInfo`, then the `getEpisodeCollection` /
+`getEntryDownloadInfo` calls — whichever the plugin sandbox hydrates (in practice
+`entry.downloadInfo`, the "episodes to download" list). Shows over 300 episodes fall back
+to the contiguous count strip.
 
 ## Diagnostics toggle
 
