@@ -63,7 +63,31 @@ function init() {
             ]),
         )
 
-        diag("Episode Overview Bar v0.4.0 active")
+        diag("Episode Overview Bar v0.4.1 active")
+
+        // One-time stylesheet for the detail-page per-episode hover tooltips.
+        const EPOV_CSS =
+            ".epov-seg{position:absolute;top:0;bottom:0;cursor:default}" +
+            ".epov-seg .epov-tip{position:absolute;bottom:calc(100% + 5px);left:50%;" +
+            "transform:translateX(-50%) translateY(2px);white-space:nowrap;padding:3px 7px;" +
+            "border-radius:5px;font-size:11px;line-height:1.2;background:rgb(var(--color-gray-950));" +
+            "color:rgb(var(--color-gray-100));border:1px solid rgba(255,255,255,0.14);" +
+            "box-shadow:0 2px 8px rgba(0,0,0,0.45);opacity:0;pointer-events:none;z-index:60;" +
+            "transition:opacity .15s ease,transform .15s ease}" +
+            ".epov-seg:hover .epov-tip{opacity:1;transform:translateX(-50%) translateY(0)}"
+        async function injectStyleOnce() {
+            try {
+                if (await ctx.dom.queryOne("#epov-style")) return
+                const style = await ctx.dom.createElement("style")
+                style.setAttribute("id", "epov-style")
+                style.setText(EPOV_CSS)
+                const host = (await ctx.dom.queryOne("head")) || (await ctx.dom.queryOne("body"))
+                if (host) host.append(style)
+            } catch (e) {
+                $debug.error("[episode-overview-bar] style inject failed", e)
+            }
+        }
+        void injectStyleOnce()
 
         // ── Theme-aware colors (resolve against Seanime's CSS variables) ──────
         // To restyle, edit these. var(--brand) follows the user's accent color;
@@ -242,10 +266,11 @@ function init() {
         }
 
         // ── Rendering ────────────────────────────────────────────────────────
-        function pct(part: number, denom: number): number {
-            if (denom <= 0) return 0
+        // Exact percentage (no rounding) so fills land on segment boundaries.
+        function pct(part: number, denom: number): string {
+            if (denom <= 0) return "0"
             const p = (part / denom) * 100
-            return Math.max(0, Math.min(100, Math.round(p * 10) / 10))
+            return Math.max(0, Math.min(100, p)).toFixed(3)
         }
 
         // Library layer as per-episode cells: a left-to-right gradient with hard
@@ -262,13 +287,64 @@ function init() {
             return "linear-gradient(to right," + stops.join(",") + ")"
         }
 
-        function renderBarHTML(c: Counts, big: boolean): string {
+        // Episode dividers: `widthPx`-wide lines centered on each internal boundary
+        // (so the watched/aired fills meet the divider exactly, no overshoot).
+        function dividerBg(total: number, color: string, widthPx: number): string {
+            const half = widthPx / 2
+            const stops: string[] = ["transparent 0"]
+            for (let k = 1; k < total; k++) {
+                const pos = ((k / total) * 100).toFixed(3)
+                stops.push(`transparent calc(${pos}% - ${half}px)`)
+                stops.push(`${color} calc(${pos}% - ${half}px)`)
+                stops.push(`${color} calc(${pos}% + ${half}px)`)
+                stops.push(`transparent calc(${pos}% + ${half}px)`)
+            }
+            stops.push("transparent 100%")
+            return "linear-gradient(to right," + stops.join(",") + ")"
+        }
+
+        function segStatus(c: Counts, n: number): string {
+            if (n <= c.watched) return "watched"
+            if (c.present ? c.present[n - 1] : n <= c.library) return "in library"
+            if (n <= c.aired) return "missing"
+            return "not aired"
+        }
+
+        // "Missing: 16–19, 22–24" — aired episodes absent from the library.
+        function missingRanges(c: Counts): string {
+            if (!c.present || !c.present.length) return ""
+            const a = c.aired > 0 ? c.aired : c.present.length
+            const miss: number[] = []
+            for (let n = 1; n <= a && n <= c.present.length; n++) if (!c.present[n - 1]) miss.push(n)
+            if (!miss.length) return ""
+            const parts: string[] = []
+            let start = miss[0]
+            let prev = miss[0]
+            for (let i = 1; i < miss.length; i++) {
+                const n = miss[i]
+                if (n === prev + 1) {
+                    prev = n
+                    continue
+                }
+                parts.push(start === prev ? "" + start : start + "–" + prev)
+                start = n
+                prev = n
+            }
+            parts.push(start === prev ? "" + start : start + "–" + prev)
+            return "Missing: " + parts.join(", ")
+        }
+
+        type RenderOpts = { big?: boolean; showMissing?: boolean; interactive?: boolean }
+
+        function renderBarHTML(c: Counts, opts: RenderOpts): string {
+            const big = !!opts.big
             const denom =
                 c.total > 0
                     ? c.total
                     : Math.max(c.aired, c.library, c.watched, c.present ? c.present.length : 0, 1)
             const h = big ? 14 : 10
             const fs = big ? 12 : 11
+            const segmented = c.total > 1 && c.total <= 100
 
             // In-library layer: per-episode gaps when we have presence data, else a
             // contiguous strip sized by the count.
@@ -279,17 +355,12 @@ function init() {
                     : `<div style="position:absolute;left:0;bottom:0;height:3px;width:${pct(c.library, denom)}%;` +
                       `background:${COLORS.library}"></div>`
 
-            let segs = ""
-            if (c.total > 1 && c.total <= 100) {
-                const step = 100 / c.total
-                segs =
-                    `<div style="position:absolute;inset:0;pointer-events:none;` +
-                    `background:repeating-linear-gradient(to right,transparent 0,` +
-                    `transparent calc(${step}% - 1px),${COLORS.segment} calc(${step}% - 1px),` +
-                    `${COLORS.segment} ${step}%)"></div>`
-            }
+            const dividers = segmented
+                ? `<div style="position:absolute;inset:0;pointer-events:none;` +
+                  `background:${dividerBg(c.total, COLORS.segment, 3)}"></div>`
+                : ""
 
-            return (
+            const barbox =
                 `<div style="position:relative;width:100%;height:${h}px;border-radius:4px;` +
                 `overflow:hidden;background:${COLORS.track}">` +
                 `<div style="position:absolute;left:0;top:0;bottom:0;width:${pct(c.aired, denom)}%;` +
@@ -297,21 +368,47 @@ function init() {
                 `<div style="position:absolute;left:0;top:0;bottom:0;width:${pct(c.watched, denom)}%;` +
                 `background:${COLORS.watched};opacity:.9"></div>` +
                 libLayer +
-                segs +
-                `</div>` +
+                dividers +
+                `</div>`
+
+            // Interactive per-episode hover targets (detail page only). Lives
+            // outside the overflow-hidden barbox so tooltips can extend above it.
+            let segOverlay = ""
+            if (opts.interactive && segmented) {
+                let cells = ""
+                for (let n = 1; n <= c.total; n++) {
+                    const left = (((n - 1) / c.total) * 100).toFixed(3)
+                    const wdt = (100 / c.total).toFixed(3)
+                    cells +=
+                        `<div class="epov-seg" style="left:${left}%;width:${wdt}%">` +
+                        `<span class="epov-tip">Ep ${n} — ${segStatus(c, n)}</span></div>`
+                }
+                segOverlay = `<div class="epov-segs" style="position:absolute;left:0;right:0;top:0;height:${h}px">${cells}</div>`
+            }
+
+            const label =
                 `<div style="font-size:${fs}px;line-height:1.35;opacity:.85;margin-top:3px">` +
                 `${c.total || "?"} total · ${c.aired} aired · ${c.library} in library · ${c.watched} watched` +
                 `</div>`
-            )
+
+            let missingLine = ""
+            if (opts.showMissing) {
+                const m = missingRanges(c)
+                if (m)
+                    missingLine =
+                        `<div style="font-size:${fs - 1}px;line-height:1.35;opacity:.7;margin-top:1px">${m}</div>`
+            }
+
+            return `<div style="position:relative;width:100%">${barbox}${segOverlay}</div>` + label + missingLine
         }
 
         // One createElement + one setInnerHTML (the styled wrapper + marker live
         // inside the HTML), so each bar costs only ~2 client messages.
-        async function makeBox(c: Counts, big: boolean, padding: string): Promise<$ui.DOMElement> {
+        async function makeBox(c: Counts, opts: RenderOpts, padding: string): Promise<$ui.DOMElement> {
             const box = await ctx.dom.createElement("div")
             box.setInnerHTML(
                 `<div data-epov-bar="1" style="width:100%;padding:${padding};box-sizing:border-box">` +
-                    renderBarHTML(c, big) +
+                    renderBarHTML(c, opts) +
                     `</div>`,
             )
             return box
@@ -409,7 +506,7 @@ function init() {
             if (!id || isNaN(id)) return false
             const c = await getCounts(id)
             if (!c) return false
-            const box = await makeBox(c, false, "4px 2px 2px")
+            const box = await makeBox(c, { big: false }, "4px 2px 2px")
             const title = await card.queryOne(CARD_TITLE_SELECTOR)
             if (title) title.append(box)
             else card.append(box)
@@ -457,7 +554,7 @@ function init() {
             if (!id) return
             const c = await getCounts(id)
             if (!c) return
-            const box = await makeBox(c, true, "8px 0 6px")
+            const box = await makeBox(c, { big: true, showMissing: true, interactive: true }, "8px 0 6px")
             box.setAttribute("data-epov-detail-bar", "1")
             view.before(box)
         })
