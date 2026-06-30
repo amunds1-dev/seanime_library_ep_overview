@@ -63,31 +63,7 @@ function init() {
             ]),
         )
 
-        diag("Episode Overview Bar v0.4.1 active")
-
-        // One-time stylesheet for the detail-page per-episode hover tooltips.
-        const EPOV_CSS =
-            ".epov-seg{position:absolute;top:0;bottom:0;cursor:default}" +
-            ".epov-seg .epov-tip{position:absolute;bottom:calc(100% + 5px);left:50%;" +
-            "transform:translateX(-50%) translateY(2px);white-space:nowrap;padding:3px 7px;" +
-            "border-radius:5px;font-size:11px;line-height:1.2;background:rgb(var(--color-gray-950));" +
-            "color:rgb(var(--color-gray-100));border:1px solid rgba(255,255,255,0.14);" +
-            "box-shadow:0 2px 8px rgba(0,0,0,0.45);opacity:0;pointer-events:none;z-index:60;" +
-            "transition:opacity .15s ease,transform .15s ease}" +
-            ".epov-seg:hover .epov-tip{opacity:1;transform:translateX(-50%) translateY(0)}"
-        async function injectStyleOnce() {
-            try {
-                if (await ctx.dom.queryOne("#epov-style")) return
-                const style = await ctx.dom.createElement("style")
-                style.setAttribute("id", "epov-style")
-                style.setText(EPOV_CSS)
-                const host = (await ctx.dom.queryOne("head")) || (await ctx.dom.queryOne("body"))
-                if (host) host.append(style)
-            } catch (e) {
-                $debug.error("[episode-overview-bar] style inject failed", e)
-            }
-        }
-        void injectStyleOnce()
+        diag("Episode Overview Bar v0.4.2 active")
 
         // ── Theme-aware colors (resolve against Seanime's CSS variables) ──────
         // To restyle, edit these. var(--brand) follows the user's accent color;
@@ -375,15 +351,29 @@ function init() {
             // outside the overflow-hidden barbox so tooltips can extend above it.
             let segOverlay = ""
             if (opts.interactive && segmented) {
+                // Everything is inline-styled (incl. opacity:0) so the tips are
+                // hidden by default. Only the hover *reveal* needs the local <style>;
+                // if the sandbox strips it, the tips simply stay hidden — no overlap.
+                const tipStyle =
+                    "position:absolute;bottom:calc(100% + 5px);left:50%;" +
+                    "transform:translateX(-50%) translateY(2px);white-space:nowrap;padding:3px 7px;" +
+                    "border-radius:5px;font-size:11px;line-height:1.2;background:rgb(var(--color-gray-950));" +
+                    "color:rgb(var(--color-gray-100));border:1px solid rgba(255,255,255,0.14);" +
+                    "box-shadow:0 2px 8px rgba(0,0,0,.45);opacity:0;pointer-events:none;z-index:60;" +
+                    "transition:opacity .15s ease,transform .15s ease"
                 let cells = ""
                 for (let n = 1; n <= c.total; n++) {
                     const left = (((n - 1) / c.total) * 100).toFixed(3)
                     const wdt = (100 / c.total).toFixed(3)
                     cells +=
-                        `<div class="epov-seg" style="left:${left}%;width:${wdt}%">` +
-                        `<span class="epov-tip">Ep ${n} — ${segStatus(c, n)}</span></div>`
+                        `<div class="epov-seg" style="position:absolute;top:0;bottom:0;left:${left}%;width:${wdt}%;cursor:default">` +
+                        `<span class="epov-tip" style="${tipStyle}">Ep ${n} — ${segStatus(c, n)}</span></div>`
                 }
-                segOverlay = `<div class="epov-segs" style="position:absolute;left:0;right:0;top:0;height:${h}px">${cells}</div>`
+                const hoverCss =
+                    "<style>.epov-seg:hover .epov-tip{opacity:1 !important;" +
+                    "transform:translateX(-50%) translateY(0) !important}</style>"
+                segOverlay =
+                    hoverCss + `<div style="position:absolute;left:0;right:0;top:0;height:${h}px">${cells}</div>`
             }
 
             const label =
