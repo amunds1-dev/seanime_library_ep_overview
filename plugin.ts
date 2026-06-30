@@ -63,7 +63,7 @@ function init() {
             ]),
         )
 
-        diag("Episode Overview Bar v0.4.2 active")
+        diag("Episode Overview Bar v0.4.3 active")
 
         // ── Theme-aware colors (resolve against Seanime's CSS variables) ──────
         // To restyle, edit these. var(--brand) follows the user's accent color;
@@ -73,7 +73,7 @@ function init() {
             aired: "rgb(var(--color-gray-200) / 0.32)", // aired fill
             watched: "rgb(var(--color-brand-300))", // watched — light purple (accent)
             library: "rgb(var(--color-brand-300))", // in-library — light purple (accent)
-            segment: "rgb(var(--color-gray-950) / 0.40)", // segment dividers
+            segment: "#000000", // segment dividers (solid black)
         }
 
         // ── Selectors (confirmed from v3.8.7 frontend source) ────────────────
@@ -376,20 +376,15 @@ function init() {
                     hoverCss + `<div style="position:absolute;left:0;right:0;top:0;height:${h}px">${cells}</div>`
             }
 
-            const label =
-                `<div style="font-size:${fs}px;line-height:1.35;opacity:.85;margin-top:3px">` +
-                `${c.total || "?"} total · ${c.aired} aired · ${c.library} in library · ${c.watched} watched` +
-                `</div>`
-
-            let missingLine = ""
+            let labelText =
+                `${c.total || "?"} total · ${c.aired} aired · ${c.library} in library · ${c.watched} watched`
             if (opts.showMissing) {
                 const m = missingRanges(c)
-                if (m)
-                    missingLine =
-                        `<div style="font-size:${fs - 1}px;line-height:1.35;opacity:.7;margin-top:1px">${m}</div>`
+                if (m) labelText += " · " + m
             }
+            const label = `<div style="font-size:${fs}px;line-height:1.35;opacity:.85;margin-top:3px">${labelText}</div>`
 
-            return `<div style="position:relative;width:100%">${barbox}${segOverlay}</div>` + label + missingLine
+            return `<div style="position:relative;width:100%">${barbox}${segOverlay}</div>` + label
         }
 
         // One createElement + one setInnerHTML (the styled wrapper + marker live
